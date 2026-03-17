@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import rospy
-from rss2_msgsrv_pkg.msg import date_cmd_vel
+from rss_msgsrv_pkg.msg import date_cmd_vel
 
 def callback(msg):
     rospy.loginfo(msg.pw_date)
