@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import rospy
+import math
 from geometry_msgs.msg import Twist
 
 class MoveTurtleBot():
@@ -58,7 +59,7 @@ if __name__ == '__main__':
     try:
         while(True):
             moveturtlebot_object.move_turtlebot(5, 0.5, 0)
-            moveturtlebot_object.move_turtlebot(10, 0, 0.1)
+            moveturtlebot_object.move_turtlebot(1, 0, math.pi/4)
         
     except rospy.ROSInterruptException:
         pass
