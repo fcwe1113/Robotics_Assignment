@@ -1,22 +1,55 @@
 #!/usr/bin/env python3
+
+from __future__ import print_function
+
+import roslib; roslib.load_manifest('teleop_twist_keyboard')
 import rospy
-from rss_msgsrv_pkg.msg import date_cmd_vel
+
 from geometry_msgs.msg import Twist
-from datetime import datetime
-from move_turtlebot import MoveTurtleBot
 
-rospy.init_node("msg_pub")
-now = datetime.now()
-date_str = now.strftime("%m/%d/%y,%H:%M:%S")
-pw_cmd_vel = date_cmd_vel()
-pw_cmd_vel.pw_date = date_str
-pw_cmd_vel.pw_cmd_vel.linear.x = 0.5
-pw_cmd_vel.pw_cmd_vel.angular.z = 0.1
-pub = rospy.Publisher("/pw_topic" , date_cmd_vel, queue_size=1)
-rate = rospy.Rate(1)
-moveturtlebot_object = MoveTurtleBot()
+import sys, select, termios, tty
 
-while not rospy.is_shutdown():
-    moveturtlebot_object.move_turtlebot(1, 1, 0)
-    pub.publish(pw_cmd_vel)
-    rate.sleep()
+msg = """
+Reading from the keyboard  and Publishing to Twist!
+Press any key to toggle movement
+CTRL-C to quit
+"""
+
+def getKey():
+    tty.setraw(sys.stdin.fileno())
+    select.select([sys.stdin], [], [], 0)
+    key = sys.stdin.read(1)
+    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+    return key
+
+if __name__=="__main__":
+    settings = termios.tcgetattr(sys.stdin)
+
+    pub = rospy.Publisher('cmd_vel', Twist, queue_size = 1)
+    rospy.init_node('teleop_twist_keyboard')
+
+    move = False
+
+    try:
+        print(msg)
+        while(1):
+            key = getKey() # does this block this thread until input recieved
+            if (key == '\x03'): # break condition if user hits ctrl c
+                break
+
+            twist = Twist()
+            twist.linear.x = 0 if move else 1; twist.linear.y = 0; twist.linear.z = 0
+            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+            pub.publish(twist)
+            move = not move
+
+    except Exception as e:
+        print(e)
+
+    finally:
+        twist = Twist()
+        twist.linear.x = 0; twist.linear.y = 0; twist.linear.z = 0
+        twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+        pub.publish(twist)
+
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
