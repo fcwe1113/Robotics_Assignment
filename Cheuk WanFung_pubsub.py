@@ -5,12 +5,6 @@ from geometry_msgs.msg import Twist
 from tf.transformations import euler_from_quaternion
 import math
 
-# both turtlebot models have wheels of 66mm diameter, source: https://emanual.robotis.com/docs/en/platform/turtlebot3/features/#data-of-turtlebot3-burger
-# circumference = PI * (66 / 2)^2 = 3421.1944mm = 342.11944cm
-# assume that the wheel friction is working as intended that means one full wheel rotation would move the robot by 342.11944cm
-
-# if user enters negative number robot will move backwards
-
 def odom_callback(msg):
     global distance_moved, initial_position
 
@@ -33,6 +27,9 @@ if __name__=="__main__":
             print("please enter a valid number")
             continue
         finally:
+            if dist < 0:
+                print("please enter a positive number")
+                continue
             print(f"moving the robot by {dist} meters")
             break
     
