@@ -1,0 +1,3 @@
+<launch>
+	<node name="pubsub" pkg="rss_assignment" output="screen" type="Cheuk_WanFung_subscriber.py" />
+</launch>

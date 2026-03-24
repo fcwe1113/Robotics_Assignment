@@ -20,7 +20,8 @@ def odom_callback(msg):
 
 if __name__=="__main__":
     while True: # user has to input valid distance to leave loop
-        dist = input("please enter the distance to be travelled in meters: ")
+        print("please enter the distance to be travelled in meters: ")
+        dist = input()
         try:
             dist = float(dist)
         except ValueError:

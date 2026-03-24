@@ -31,7 +31,7 @@ if __name__=="__main__":
     move = False
 
     try:
-        print(msg)
+        rospy.loginfo(msg)
         while(1):
             key = getKey() # does this block this thread until input recieved
             if (key == '\x03'): # break condition if user hits ctrl c
