@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import roslaunch
 import rospy
+import sys
+import select
+import termios
+import tty
 
 from robot_obj import robot_obj
 
@@ -31,14 +35,77 @@ def display_bot_infos() -> str:
     
     return output
 
+def getKey():
+    tty.setraw(sys.stdin.fileno())
+    select.select([sys.stdin], [], [], 0)
+    key = sys.stdin.read(1)
+    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+    return key
+
 def selected_bot_control(selected_bot):
     while True:
-        inputt = input(f"selected bot:\n{selected_bot.to_string_long()}\n1. update information\n2. move forward\n3. change orientation\n9. exit to main menu")
+        inputt = input(f"selected bot:\n{selected_bot.to_string_long()}\n1. update information\n2. move robot\n9. exit to main menu\n")
         if inputt == "1":
             pass
         elif inputt == "2":
-            # do normal movement b4 PID via {not_name}/cmd_vel
-            ...
+            while True:
+                # do normal movement b4 PID via {not_name}/cmd_vel
+                inputt = input(f"select movement mode\n1. teleop\n2. PID\n3. return to previous menu\n")
+                if inputt == "1":
+                    selected_bot.set_moving(True)
+                    instruction = "Reading from keyboard\n------------------------------\n    ^\n    |\n    w\n<-a   d->\n    s\n    |\n    v\n------------------------------\n\n10% \step per press\npress space to stop movement\npress any other key to exit"
+                    print(instruction)
+                    while True:
+                        (speed, rotation) = selected_bot.get_movement_vars()
+                        print(f"current speed: {round(speed * 100, 2)}%, current rotation: {round(rotation * 100, 2)}%")
+                        key = getKey() # does it block?
+                        if key == "w":
+                            selected_bot.set_movement_vars(speed + 0.1, rotation)
+                        elif key == "a":
+                            selected_bot.set_movement_vars(speed, rotation + 0.1)
+                        elif key == "s":
+                            selected_bot.set_movement_vars(speed - 0.1, rotation)
+                        elif key == "d":
+                            selected_bot.set_movement_vars(speed, rotation - 0.1)
+                        elif key == " ":
+                            selected_bot.set_movement_vars(0, 0)
+                        else:
+                            print("exiting teleop mode...")
+                            selected_bot.stop_moving()
+                            break
+
+                elif inputt == "2": # PID
+                    selected_bot.set_use_PID(True)
+                    while True:
+                        inputt = input(f"{selected_bot.PID_debug_string}\nselect PID operation\n1. add waypoint\n2. return to previous menu\nhold enter to update display\n")
+                        if inputt == "1":
+                            x = 0
+                            y = 0
+                            inputt = input("input the x coordinate of the waypoint")
+                            try:
+                                x = float(inputt)
+                            except ValueError:
+                                print("invalid input")
+                                continue
+                            inputt = input("input the y coordinate of the waypoint")
+                            try:
+                                y = float(inputt)
+                            except ValueError:
+                                print("invalid input")
+                                continue
+                            selected_bot.PID_enqueue(x, y)
+                        elif inputt == "2":
+                            print("exiting PID mode...")
+                            selected_bot.PID_clear()
+                            selected_bot.set_use_PID(False)
+                            break
+
+                elif inputt == "3":
+                    print("returning...")
+                    break
+                else:
+                    print("invalid input")
+
         elif inputt == "3":
             ...
         elif inputt == "9":
@@ -46,6 +113,7 @@ def selected_bot_control(selected_bot):
             return
 
 if __name__=="__main__":
+    settings = termios.tcgetattr(sys.stdin)
     rospy.init_node(f'multibot_node')
     while True:
         status = f"""number of robots: {len(robot_list)}
@@ -90,8 +158,8 @@ if __name__=="__main__":
                     print(f"{bot}")
                     counter += 1
                 
-                inputt = input("Please select robot to control")
-                if inputt < len(robot_list):
+                inputt = input("Please select robot to control: ") # fix ui
+                if int(inputt) < len(robot_list): # add type check
                     selected_bot_control(robot_list[f"tb3_{inputt}"])
                 else:
                     print("invalid input, returning to main menu")
