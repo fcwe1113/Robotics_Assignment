@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import roslaunch
+from robot_obj import robot_obj
 
 robot_list = {}
 
@@ -8,13 +9,26 @@ robot_list = {}
 # note the above command does not enable sending individual commands to robots
 # commands would just be applied globally
 
-def spawn_bot(x, y):
+## maybe split robots via subscribe topics
+
+def spawn_bot(x, y) -> robot_obj:
+    name = f"tb3_{str(len(robot_list))}"
     uuid = roslaunch.rlutil.get_or_generate_uuid(None, False)
-    cli_args = ["rss_assignment", "multi_robot_spawn.launch",f'robot_name:="{"tb3_" + str(len(robot_list))}"', f"initial_x:=-x {x}", f"initial_y:=-y {y}", "model:=burger"]
+    cli_args = ["rss_assignment", "multi_robot_spawn.launch", f'robot_name:={name}', f"initial_x:=-x {x}", f"initial_y:=-y {y}", "model:=burger"]
     roslaunch_file = [(roslaunch.rlutil.resolve_launch_arguments(cli_args)[0], cli_args[2:])]
     parent = roslaunch.parent.ROSLaunchParent(uuid, roslaunch_file)
     parent.start()
-    return parent
+    return robot_obj(name) # fix this unneeded return
+
+def display_bot_infos() -> str:
+    output = ""
+    if len(robot_list) == 0:
+        return "robot list empty"
+    
+    for obj in robot_list.items(): # check functionality
+        output += obj + "\n"
+    
+    return output
 
 if __name__=="__main__":
     while True:
@@ -37,7 +51,6 @@ if __name__=="__main__":
             else:
                 inputt = input("Please enter the y coordinate of the new robot: ")
                 try:
-                    # global y
                     y = float(inputt)
                 except ValueError:
                     print("Please enter a valid number(y)")
