@@ -27,9 +27,6 @@ class robot_obj:
     PID_MAX_SPEED: float # max speed percentage available to PID movement system
     PID_MAX_ROTATE: float # max rotation percentage available to PID movement system
     PID_MAX_SPEED_STEP: float # max acceleration available to PID movement system
-    PID_MAX_ROTATE_STEP: float # max rotate acceleration available to PID movement system
-    PID_accel: float
-    PID_rotate_accel: float
     MAX_SPEED: float # max speed of the robot
     MAX_ROTATION: float # max rotation of the robot
 
@@ -47,14 +44,11 @@ class robot_obj:
         self.PID_queue = []
         self.PID_ongoing = False
         self.PID_movement_to_go = 0
-        self.PID_DIST_THRESHOLD = 0.001
-        self.PID_ORIENTATION_ROTATE_THRESHOLD = 3
-        self.PID_MAX_SPEED = 0.5
+        self.PID_DIST_THRESHOLD = 0.1
+        self.PID_ORIENTATION_ROTATE_THRESHOLD = 5
+        self.PID_MAX_SPEED = 50
         self.PID_MAX_ROTATE = 0.3
         self.PID_MAX_SPEED_STEP = 0.001
-        self.PID_MAX_ROTATE_STEP = 0.1
-        self.PID_accel = 0
-        self.PID_rotate_accel = 0
 
         self.movement_PID_output = 0
         self.rotation_PID_output = 0
@@ -63,6 +57,7 @@ class robot_obj:
         self.MAX_ROTATION = 2.84
         self.rotation_PID = robot_PID()
         self.movement_PID = robot_PID()
+        self.move_counter = 50
 
         # start the bot thread
         self.bot_thread = threading.Thread(target=self.spin)
@@ -119,17 +114,11 @@ class robot_obj:
     
     def PID_clear(self):
         self.PID_queue = []
-
-    def PID_linear_movement(self):
-        ...
-
-    def PID_angular_movement(self, target) -> float:
-        ...
     
     def PID_debug_string(self):
         if self.PID_queue:
-            (x, y) = self.PID_queue[-1]
-        return f"\n\nPID stats:\ncurrent destination: {self.PID_queue[-1]}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}" if self.PID_queue else "PID has no queued waypoints"
+            (x, y) = self.PID_queue[0]
+        return f"\n\nPID stats:\ncurrent destination: {self.PID_queue[0]}\nqueue: {self.PID_queue}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}\nmove counter: {self.move_counter}" if self.PID_queue else "PID has no queued waypoints"
     
     def spin(self):
         rospy.Subscriber(f'{self.name}/odom', Odometry, self.update_callback) # check if functioning
@@ -141,11 +130,12 @@ class robot_obj:
                 if self.PID:
                     if self.PID_queue: # does not run if queue is empty
 
-                        (x, y) = self.PID_queue[-1]
+                        (x, y) = self.PID_queue[0]
 
                         if not self.PID_ongoing: # update destination to PIDs when starting new operation
                             self.movement_PID.update_setpoint(self.distance_to_point(x, y))
                             self.PID_movement_to_go = self.distance_to_point(x, y)
+                            self.move_counter = 50
                             self.PID_ongoing = True
 
                         arrived = False
@@ -155,20 +145,25 @@ class robot_obj:
                         # 2. if angle diff lower than threhold and distance higher than threhold, start moving linearly towards goal, rotation PID stays active to correct course if needed
                         # 3. if distance lower than threshold, stop both PIDs and mark arrived flag, assign next waypoint if available
                                                 
-                        if abs(self.angle_difference(x, y)) < self.PID_ORIENTATION_ROTATE_THRESHOLD:
-                            self.movement_PID_output = self.movement_PID.compute(self.distance_to_point(x, y) - self.PID_movement_to_go) / 1
-                            self.speed = min(self.movement_PID_output, self.PID_MAX_SPEED)# if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED)
-                        elif self.distance_to_point(x, y) < self.PID_DIST_THRESHOLD:
-                            arrived = True
+                        if abs(self.angle_difference(x, y)) < self.PID_ORIENTATION_ROTATE_THRESHOLD or self.move_counter == 0: # check if move counter should stay
+                            if self.move_counter > 0:
+                                self.move_counter -= 1
+                            else:
+                                self.movement_PID_output = self.movement_PID.compute(self.distance_to_point(x, y) - self.PID_movement_to_go) * 10
+                                self.speed = min(self.movement_PID_output, self.PID_MAX_SPEED)# if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED)
                         else:
                             self.speed = 0
+                            self.move_counter = 50
+                        
+                        if self.distance_to_point(x, y) < self.PID_DIST_THRESHOLD:
+                            arrived = True
+                            self.move_counter = 50
                         
                         self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 1
-
-                        self.rotation = min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, self.PID_MAX_ROTATE)
+                        self.rotation = min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, -self.PID_MAX_ROTATE)
 
                         if arrived:
-                            self.PID_queue.pop()
+                            self.PID_queue.pop(0)
                             self.PID_ongoing = False
 
                     else:

@@ -5,6 +5,9 @@ import sys
 import select
 import termios
 import tty
+import random
+import os
+import time
 
 from robot_obj import robot_obj
 
@@ -76,7 +79,7 @@ def selected_bot_control(selected_bot):
                     selected_bot.set_moving(True)
                     selected_bot.set_use_PID(True)
                     while True:
-                        inputt = input(f"{selected_bot.PID_debug_string()}\nselect PID operation\n1. add waypoint\n2. return to previous menu\nhold enter to update display\n")
+                        inputt = input(f"{selected_bot.PID_debug_string()}\nselect PID operation\n1. add waypoint\n2. add random waypoints\n3. return to previous menu\nhold enter to update display\n")
                         if inputt == "1":
                             x = 0
                             y = 0
@@ -94,6 +97,16 @@ def selected_bot_control(selected_bot):
                                 continue
                             selected_bot.PID_enqueue(x, y)
                         elif inputt == "2":
+                            inputt = input("input the number of coords to travel to: ")
+                            try:
+                                n = int(inputt)
+                            except ValueError:
+                                print("invalid input")
+                                continue
+                            random.seed(time.time())
+                            for i in range(n):
+                                selected_bot.PID_enqueue(random.randint(-10, 10), random.randint(-10, 10))
+                        elif inputt == "3":
                             print("exiting PID mode...")
                             selected_bot.PID_clear()
                             selected_bot.stop_moving()
