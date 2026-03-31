@@ -3,9 +3,10 @@ import rospy
 import threading
 import math
 
-from typing import Tuple
+from typing import Tuple, List
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
+from robot_PID import robot_PID
 
 class robot_obj:
 
@@ -18,14 +19,21 @@ class robot_obj:
     rotation: float # left right axis, shows percent of rotation
     moving: bool
     PID: bool # shows robot moving with PID or raw speed/rotation vars
-    PID_queue: list[Tuple[float, float]] # list of tuples containing (dest_x, dest_y)
+    PID_queue: List[Tuple[float, float]] # list of tuples containing (dest_x, dest_y)
+    PID_ongoing: bool # flag to identify ongoing PID operation
+    PID_movement_to_go: float # number to input into movement_PID
     PID_DIST_THRESHOLD: float # in meters
-    PID_ORIENTATION_ROTATE_THRESHOLD: float # in degrees
-    PID_ORIENTATION_MOVE_THRESHOLD: float # prevent linear movement before the robot is facing the right direction
+    PID_ORIENTATION_ROTATE_THRESHOLD: float # in degrees, functions as the "good enough" point
     PID_MAX_SPEED: float # max speed percentage available to PID movement system
     PID_MAX_ROTATE: float # max rotation percentage available to PID movement system
+    PID_MAX_SPEED_STEP: float # max acceleration available to PID movement system
+    PID_MAX_ROTATE_STEP: float # max rotate acceleration available to PID movement system
+    PID_accel: float
+    PID_rotate_accel: float
     MAX_SPEED: float # max speed of the robot
     MAX_ROTATION: float # max rotation of the robot
+
+    # maybe set pid min speed/rotation
 
     def __init__(self, name):
         self.name = name
@@ -35,14 +43,26 @@ class robot_obj:
         self.rotation = 0
         self.moving = False
         self.PID = False
+
         self.PID_queue = []
+        self.PID_ongoing = False
+        self.PID_movement_to_go = 0
         self.PID_DIST_THRESHOLD = 0.001
-        self.PID_ORIENTATION_ROTATE_THRESHOLD = 2
-        self.PID_ORIENTATION_MOVE_THRESHOLD = 5
+        self.PID_ORIENTATION_ROTATE_THRESHOLD = 3
         self.PID_MAX_SPEED = 0.5
         self.PID_MAX_ROTATE = 0.3
+        self.PID_MAX_SPEED_STEP = 0.001
+        self.PID_MAX_ROTATE_STEP = 0.1
+        self.PID_accel = 0
+        self.PID_rotate_accel = 0
+
+        self.movement_PID_output = 0
+        self.rotation_PID_output = 0
+        
         self.MAX_SPEED = 0.22
         self.MAX_ROTATION = 2.84
+        self.rotation_PID = robot_PID()
+        self.movement_PID = robot_PID()
 
         # start the bot thread
         self.bot_thread = threading.Thread(target=self.spin)
@@ -61,35 +81,26 @@ class robot_obj:
     def stop_moving(self):
         self.speed = 0
         self.rotation = 0
-        movement_control.publish(self.twist)
+        self.movement_control.publish(self.twist)
         self.set_moving(False)
     
     def distance_to_point(self, x2, y2): # in meters
         (x1, y1) = self.position
         return math.sqrt((x1 - x2)**2 + (y1 - y2)**2)
     
-    def angle_to_point(self, x2, y2):
+    def angle_to_point(self, x2, y2): # required orientation to face the dest
         (x1, y1) = self.position
-        return math.arctan2(y2 - y1, x2 - x1) if x1 != x2 or y1 != y2 else 0
+        return np.rad2deg(np.arctan2(y2 - y1, x2 - x1)) + 180 if x1 != x2 or y1 != y2 else 0
     
-    def angle_difference(self, x2, y2):
-        angle = angle_to_point(x2, y2)
-        if math.abs(self.orientation - angle) > 180:
-            if self.orientation > angle:
-                return angle + 360 - self.orientation
-            else:
-                return self.orientation + 360 - angle
-        else:
-            if self.orientation > angle:
-                return self.orientation - angle
-            else:
-                return angle - self.orientation
+    def angle_difference(self, x2, y2): # the angle diff between current and required angle
+        output = self.orientation - self.angle_to_point(x2, y2)
+        return output if output < 180 else 180 - output
     
     def update_callback(self, msg):
         position = msg.pose.pose.position
         quat = msg.pose.pose.orientation
         # line below modified from https://github.com/Tinker-Twins/Autonomy-Science-And-Systems/blob/main/Assignment%203-A/assignment_3a/turtlebot3/turtlebot3/turtlebot3_example/turtlebot3_example/turtlebot3_position_control/turtlebot3_position_control.py
-        self.orientation = np.arctan2(2 * (quat.w * quat.z + quat.x * quat.y), 1 - 2 * (quat.y ** 2 + quat.z ** 2)) * 180 / math.pi + 180
+        self.orientation = np.arctan2(2 * (quat.w * quat.z + quat.x * quat.y), 1 - 2 * (quat.y ** 2 + quat.z ** 2)) * 180 / math.pi + 180 # added 180 bc the original scale goes from -180 to 180
         self.position = [position.x, position.y] # tuples assign like mini arrays
         self.init_odom_state = True
         # print(f"robot {self.name} callback, pos: {self.position}")
@@ -112,12 +123,13 @@ class robot_obj:
     def PID_linear_movement(self):
         ...
 
-    def PID_angular_movement(self):
-        self.twist.angular.z = self.rotation * self.MAX_ROTATION
+    def PID_angular_movement(self, target) -> float:
+        ...
     
     def PID_debug_string(self):
-        (x, y) = self.PID_queue[-1]
-        return f"PID stats:\ncurrent destination: {self.PID_queue[-1]}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}\ncurrent orientation difference: {self.angle_difference(x, y)}\ncurrent angular movement: {self.rotation}%\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%" if self.PID_queue else "PID has no queued waypoints"
+        if self.PID_queue:
+            (x, y) = self.PID_queue[-1]
+        return f"\n\nPID stats:\ncurrent destination: {self.PID_queue[-1]}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}" if self.PID_queue else "PID has no queued waypoints"
     
     def spin(self):
         rospy.Subscriber(f'{self.name}/odom', Odometry, self.update_callback) # check if functioning
@@ -127,24 +139,44 @@ class robot_obj:
             # do pid stuff here
             if self.moving:
                 if self.PID:
-                    if not self.PID_queue:
-                        (x, y) = self.PID_queue[-1]
-                        arrived = True
-                        if self.distance_to_point(x, y) > self.PID_DIST_THRESHOLD and self.angle_difference < self.PID_ORIENTATION_MOVE_THRESHOLD:
-                            arrived = False
-                            self.PID_linear_movement()
-                        
-                        if self.angle_to_point(x, y) > self.PID_ORIENTATION_ROTATE_THRESHOLD:
-                            arrived = False
-                            self.PID_angular_movement()
-                        
-                        if arrived:
-                            PID_queue.pop()
+                    if self.PID_queue: # does not run if queue is empty
 
-                else:
-                    self.twist.linear.x = self.speed * self.MAX_SPEED
-                    self.twist.angular.z = self.rotation * self.MAX_ROTATION
+                        (x, y) = self.PID_queue[-1]
+
+                        if not self.PID_ongoing: # update destination to PIDs when starting new operation
+                            self.movement_PID.update_setpoint(self.distance_to_point(x, y))
+                            self.PID_movement_to_go = self.distance_to_point(x, y)
+                            self.PID_ongoing = True
+
+                        arrived = False
+
+                        # PID operational flowchart
+                        # 1. if angle diff is higher than threshold, rotate till lower than threshold
+                        # 2. if angle diff lower than threhold and distance higher than threhold, start moving linearly towards goal, rotation PID stays active to correct course if needed
+                        # 3. if distance lower than threshold, stop both PIDs and mark arrived flag, assign next waypoint if available
+                                                
+                        if abs(self.angle_difference(x, y)) < self.PID_ORIENTATION_ROTATE_THRESHOLD:
+                            self.movement_PID_output = self.movement_PID.compute(self.distance_to_point(x, y) - self.PID_movement_to_go) / 1
+                            self.speed = min(self.movement_PID_output, self.PID_MAX_SPEED)# if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED)
+                        elif self.distance_to_point(x, y) < self.PID_DIST_THRESHOLD:
+                            arrived = True
+                        else:
+                            self.speed = 0
+                        
+                        self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 1
+
+                        self.rotation = min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, self.PID_MAX_ROTATE)
+
+                        if arrived:
+                            self.PID_queue.pop()
+                            self.PID_ongoing = False
+
+                    else:
+                        self.speed = 0
+                        self.rotation = 0
                 
+                self.twist.linear.x = self.speed * self.MAX_SPEED
+                self.twist.angular.z = self.rotation * self.MAX_ROTATION
                 self.movement_control.publish(self.twist) # test when cutting this
 
             rate.sleep()

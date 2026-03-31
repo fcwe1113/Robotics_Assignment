@@ -15,8 +15,6 @@ robot_list = {}
 # note the above command does not enable sending individual commands to robots
 # commands would just be applied globally
 
-## maybe split robots via subscribe topics
-
 def spawn_bot(name, x, y) -> robot_obj:
     uuid = roslaunch.rlutil.get_or_generate_uuid(None, False)
     cli_args = ["rss_assignment", "multi_robot_spawn.launch", f'robot_name:={name}', f"initial_x:=-x {x}", f"initial_y:=-y {y}", "model:=burger"]
@@ -58,7 +56,7 @@ def selected_bot_control(selected_bot):
                     while True:
                         (speed, rotation) = selected_bot.get_movement_vars()
                         print(f"current speed: {round(speed * 100, 2)}%, current rotation: {round(rotation * 100, 2)}%")
-                        key = getKey() # does it block?
+                        key = getKey() # blocks main program while movement dealt with via twist
                         if key == "w":
                             selected_bot.set_movement_vars(speed + 0.1, rotation)
                         elif key == "a":
@@ -75,19 +73,20 @@ def selected_bot_control(selected_bot):
                             break
 
                 elif inputt == "2": # PID
+                    selected_bot.set_moving(True)
                     selected_bot.set_use_PID(True)
                     while True:
-                        inputt = input(f"{selected_bot.PID_debug_string}\nselect PID operation\n1. add waypoint\n2. return to previous menu\nhold enter to update display\n")
+                        inputt = input(f"{selected_bot.PID_debug_string()}\nselect PID operation\n1. add waypoint\n2. return to previous menu\nhold enter to update display\n")
                         if inputt == "1":
                             x = 0
                             y = 0
-                            inputt = input("input the x coordinate of the waypoint")
+                            inputt = input("input the x coordinate of the waypoint: ")
                             try:
                                 x = float(inputt)
                             except ValueError:
                                 print("invalid input")
                                 continue
-                            inputt = input("input the y coordinate of the waypoint")
+                            inputt = input("input the y coordinate of the waypoint: ")
                             try:
                                 y = float(inputt)
                             except ValueError:
@@ -97,6 +96,7 @@ def selected_bot_control(selected_bot):
                         elif inputt == "2":
                             print("exiting PID mode...")
                             selected_bot.PID_clear()
+                            selected_bot.stop_moving()
                             selected_bot.set_use_PID(False)
                             break
 
@@ -155,7 +155,7 @@ if __name__=="__main__":
             else:
                 counter = 0
                 for bot in robot_list.items():
-                    print(f"{bot}")
+                    print(f"{counter}. {bot}")
                     counter += 1
                 
                 inputt = input("Please select robot to control: ") # fix ui
