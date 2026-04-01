@@ -28,6 +28,8 @@ class robot_obj:
     MAX_SPEED: float # max speed of the robot
     MAX_ROTATION: float # max rotation of the robot
     state: Bot_State # shows current state of bot
+    green_light: bool # bool for controller to signify moving to next stage
+    controlled: bool # flag to disable green light above
 
     # maybe set pid min speed/rotation
 
@@ -55,6 +57,8 @@ class robot_obj:
         self.movement_PID = robot_PID()
         self.move_counter = 50
         self.state = Bot_State.IDLE
+        self.green_light = False
+        self.controlled = False
 
         # start the bot thread
         self.bot_thread = threading.Thread(target=self.spin)
@@ -72,6 +76,12 @@ class robot_obj:
 
     def get_state(self) -> Bot_State:
         return self.state
+
+    def give_green_light(self):
+        self.green_light = True
+
+    def set_controlled(self, controlled):
+        self.controlled = controlled
     
     def stop_moving(self):
         self.speed = 0
@@ -147,7 +157,6 @@ class robot_obj:
                         # 3. if distance lower than threshold, stop both PIDs and mark arrived flag, assign next waypoint if available
 
                         (x, y) = self.PID_queue[0]
-                        arrived = False
 
                         if self.state == Bot_State.WAITING: # update destination to PIDs when starting new operation
                             self.movement_PID.update_setpoint(self.distance_to_point(x, y))
@@ -168,7 +177,11 @@ class robot_obj:
                                 self.move_counter = 50
                         elif self.state == Bot_State.READY:
                             # do formation checks here
-                            self.set_state(Bot_State.MOVING)
+                            if self.green_light and self.controlled:
+                                self.set_state(Bot_State.MOVING)
+                                self.green_light = False
+                            elif not self.controlled:
+                                self.set_state(Bot_State.MOVING)
                         elif self.state == Bot_State.MOVING:
                             self.movement_PID_output = self.movement_PID.compute(
                                 self.distance_to_point(x, y) - self.PID_movement_to_go) / 50

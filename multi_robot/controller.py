@@ -81,6 +81,7 @@ def selected_bot_control(selected_bot):
 
                 elif inputt == "2": # PID
                     selected_bot.set_state(Bot_State.WAITING)
+                    selected_bot.set_controlled(False)
                     while True:
                         inputt = input(f"{selected_bot.PID_debug_string()}\nselect PID operation\n1. add waypoint\n2. add random waypoints\n3. clear PID queue\n4. return to previous menu\nhold enter to update display\n")
                         if inputt == "1":
@@ -148,6 +149,8 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
 
                 bot.PID_enqueue(new_dest[0], new_dest[1])
                 bot.set_state(Bot_State.ROTATING)
+            elif bot.get_state() in Bot_State.READY:
+                bot.give_green_light()
 
     print("stop signal received")
     for name in robot_list.keys():
@@ -234,6 +237,7 @@ if __name__=="__main__":
                                     bot_list_temp.append(robot_list[bot])
 
                                 for i in len(bot_list_temp):
+                                    bot_list_temp[i].set_controlled(True)
                                     print(f"{i}. {bot_list_temp[i]}")
 
                                 inputt = input("input the corresponding number to view detailed stats\nhold enter to update\nenter any invalid character to exit\n")
