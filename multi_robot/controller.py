@@ -172,10 +172,17 @@ if __name__=="__main__":
                     counter += 1
                 
                 inputt = input("Please select robot to control: ") # fix ui
-                if int(inputt) < len(robot_list): # add type check
-                    selected_bot_control(robot_list[f"tb3_{inputt}"])
-                else:
+                try:
+                    inputt = int(inputt)
+                except ValueError:
                     print("invalid input, returning to main menu")
+                    continue
+                else:
+                    if int(inputt) < len(robot_list): # add type check
+                        selected_bot_control(robot_list[f"tb3_{inputt}"])
+                    else:
+                        print("invalid input, returning to main menu")
+                        
         elif inputt == "4" or input == '\x03':
             print("exiting...")
             break

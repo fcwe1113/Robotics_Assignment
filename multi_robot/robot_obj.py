@@ -79,17 +79,20 @@ class robot_obj:
         self.movement_control.publish(self.twist)
         self.set_moving(False)
     
-    def distance_to_point(self, x2, y2): # in meters
+    def distance_to_point(self, x2, y2) -> float: # in meters
         (x1, y1) = self.position
         return math.sqrt((x1 - x2)**2 + (y1 - y2)**2)
     
-    def angle_to_point(self, x2, y2): # required orientation to face the dest
+    def angle_to_point(self, x2, y2) -> float: # required orientation to face the dest
         (x1, y1) = self.position
         return np.rad2deg(np.arctan2(y2 - y1, x2 - x1)) + 180 if x1 != x2 or y1 != y2 else 0
     
-    def angle_difference(self, x2, y2): # the angle diff between current and required angle
-        output = self.orientation - self.angle_to_point(x2, y2)
-        return output if output < 180 else 180 - output
+    def angle_difference(self, x2, y2) -> float: # the angle diff between current and required angle
+        output = (self.orientation - self.angle_to_point(x2, y2)) % 360
+        return output if output < 180 else -(180 - (output - 180))
+    
+    def angle_difference_percentage(self, x2, y2, factor=1) -> float:
+        return 1 - (abs(self.angle_difference(x2, y2)) / 180 * 2)
     
     def update_callback(self, msg):
         position = msg.pose.pose.position
@@ -106,6 +109,11 @@ class robot_obj:
     def to_string_long(self):
         return f"robot name: {self.name}\nposition: {self.position}\nangle: {self.orientation}°\nspeed: {round(self.speed * 100, 2)}%\nrotation: {round(self.rotation * 100, 2)}%"
     
+    def PID_debug_string(self):
+        if self.PID_queue:
+            (x, y) = self.PID_queue[0]
+        return f"\n\nPID stats:\ncurrent location: {self.position}\ncurrent destination: {self.PID_queue[0]}\nqueue: {self.PID_queue}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}\nmove counter: {self.move_counter}" if self.PID_queue else "PID has no queued waypoints"
+    
     def set_use_PID(self, value):
         self.PID = value
     
@@ -114,11 +122,6 @@ class robot_obj:
     
     def PID_clear(self):
         self.PID_queue = []
-    
-    def PID_debug_string(self):
-        if self.PID_queue:
-            (x, y) = self.PID_queue[0]
-        return f"\n\nPID stats:\ncurrent destination: {self.PID_queue[0]}\nqueue: {self.PID_queue}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}\nmove counter: {self.move_counter}" if self.PID_queue else "PID has no queued waypoints"
     
     def spin(self):
         rospy.Subscriber(f'{self.name}/odom', Odometry, self.update_callback) # check if functioning
@@ -135,6 +138,7 @@ class robot_obj:
                         if not self.PID_ongoing: # update destination to PIDs when starting new operation
                             self.movement_PID.update_setpoint(self.distance_to_point(x, y))
                             self.PID_movement_to_go = self.distance_to_point(x, y)
+                            self.rotation_PID.reset_integral()
                             self.move_counter = 50
                             self.PID_ongoing = True
 
@@ -149,8 +153,8 @@ class robot_obj:
                             if self.move_counter > 0:
                                 self.move_counter -= 1
                             else:
-                                self.movement_PID_output = self.movement_PID.compute(self.distance_to_point(x, y) - self.PID_movement_to_go) * 10
-                                self.speed = min(self.movement_PID_output, self.PID_MAX_SPEED)# if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED)
+                                self.movement_PID_output = self.movement_PID.compute(self.distance_to_point(x, y) - self.PID_movement_to_go) / 100
+                                self.speed = max(min(self.movement_PID_output, self.PID_MAX_SPEED) * self.angle_difference_percentage(x, y, 4), 0) # if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED), modified by how off course the robot is
                         else:
                             self.speed = 0
                             self.move_counter = 50
@@ -159,7 +163,7 @@ class robot_obj:
                             arrived = True
                             self.move_counter = 50
                         
-                        self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 1
+                        self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 1000
                         self.rotation = min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, -self.PID_MAX_ROTATE)
 
                         if arrived:
