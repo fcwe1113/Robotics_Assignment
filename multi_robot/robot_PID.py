@@ -4,7 +4,7 @@ class robot_PID:
     Ki: float
     Kd: float
 
-    def __init__(self, Kp=1, Ki=0.9, Kd=0.05):
+    def __init__(self, Kp=1, Ki=0.9, Kd=0.05): # lol
         self.Kp = Kp
         self.Ki = Ki
         self.Kd = Kd
