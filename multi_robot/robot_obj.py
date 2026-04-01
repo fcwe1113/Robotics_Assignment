@@ -7,6 +7,7 @@ from typing import Tuple, List
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from robot_PID import robot_PID
+from robot_states import State
 
 class robot_obj:
 
@@ -29,6 +30,8 @@ class robot_obj:
     PID_MAX_SPEED_STEP: float # max acceleration available to PID movement system
     MAX_SPEED: float # max speed of the robot
     MAX_ROTATION: float # max rotation of the robot
+
+
 
     # maybe set pid min speed/rotation
 
