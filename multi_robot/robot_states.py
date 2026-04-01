@@ -1,15 +1,15 @@
 from enum import Enum
 
-class State(Enum):
+class Bot_State(Enum):
 
     # idle states
-    IDLE = 0
+    IDLE = "idle"
 
     # PID states
-    ROTATING = 1
-    READY = 2
-    MOVING = 3
-    WAITING = 4
+    ROTATING = "rotating"
+    READY = "ready"
+    MOVING = "moving"
+    WAITING = "waiting"
 
     # teleop states
-    TELEOP = 5
+    TELEOP = "teleop"

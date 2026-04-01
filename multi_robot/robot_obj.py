@@ -7,7 +7,7 @@ from typing import Tuple, List
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from robot_PID import robot_PID
-from robot_states import State
+from robot_states import Bot_State
 
 class robot_obj:
 
@@ -27,7 +27,7 @@ class robot_obj:
     PID_MAX_SPEED_STEP: float # max acceleration available to PID movement system
     MAX_SPEED: float # max speed of the robot
     MAX_ROTATION: float # max rotation of the robot
-    state: State # shows current state of bot
+    state: Bot_State # shows current state of bot
 
     # maybe set pid min speed/rotation
 
@@ -54,7 +54,7 @@ class robot_obj:
         self.rotation_PID = robot_PID()
         self.movement_PID = robot_PID()
         self.move_counter = 50
-        self.state = State.IDLE
+        self.state = Bot_State.IDLE
 
         # start the bot thread
         self.bot_thread = threading.Thread(target=self.spin)
@@ -70,14 +70,14 @@ class robot_obj:
     def set_state(self, state):
         self.state = state
 
-    def get_state(self) -> State:
+    def get_state(self) -> Bot_State:
         return self.state
     
     def stop_moving(self):
         self.speed = 0
         self.rotation = 0
         self.movement_control.publish(self.twist)
-        self.set_state(State.IDLE)
+        self.set_state(Bot_State.IDLE)
     
     def distance_to_point(self, x2, y2) -> float: # in meters
         (x1, y1) = self.position
@@ -100,7 +100,6 @@ class robot_obj:
         # line below modified from https://github.com/Tinker-Twins/Autonomy-Science-And-Systems/blob/main/Assignment%203-A/assignment_3a/turtlebot3/turtlebot3/turtlebot3_example/turtlebot3_example/turtlebot3_position_control/turtlebot3_position_control.py
         self.orientation = np.arctan2(2 * (quat.w * quat.z + quat.x * quat.y), 1 - 2 * (quat.y ** 2 + quat.z ** 2)) * 180 / math.pi + 180 # added 180 bc the original scale goes from -180 to 180
         self.position = [position.x, position.y] # tuples assign like mini arrays
-        self.init_odom_state = True
         # print(f"robot {self.name} callback, pos: {self.position}")
     
     def __repr__(self): # similar to to_string()
@@ -109,6 +108,10 @@ class robot_obj:
     def to_string_long(self):
         return f"robot name: {self.name}\nposition: {self.position}\nangle: {self.orientation}°\nspeed: {round(self.speed * 100, 2)}%\nrotation: {round(self.rotation * 100, 2)}%"
     
+    def PID_info_string(self):
+        (x, y) = self.PID_queue[0]
+        return f"name: {self.name}\tcurrent position: {self.position}\tcurrent orientation: {self.orientation}\tdestination: ({x}, {y})\tcurrent state: {self.state.value}\n"
+
     def PID_debug_string(self):
         if self.PID_queue:
             (x, y) = self.PID_queue[0]
@@ -124,48 +127,55 @@ class robot_obj:
         rospy.Subscriber(f'{self.name}/odom', Odometry, self.update_callback) # check if functioning
         self.movement_control = rospy.Publisher(f'{self.name}/cmd_vel', Twist, queue_size=10) # check if functioning
         rate = rospy.Rate(10)  # 10 Hz meaning it reads data every 100ms
+        while True: # todo check if this prevents errors from accessing uninit bots
+            try:
+                _ = self.position
+            except AttributeError:
+                pass
+            else:
+                break
+
         while not rospy.is_shutdown():
             # do pid stuff here
-            if not self.state == State.IDLE:
-                if self.state in [State.ROTATING, State.READY, State.MOVING, State.WAITING]:
+            if not self.state == Bot_State.IDLE:
+                if self.state in [Bot_State.ROTATING, Bot_State.READY, Bot_State.MOVING, Bot_State.WAITING]:
                     if self.PID_queue: # does not run if queue is empty
-
-                        (x, y) = self.PID_queue[0]
-
-                        if self.state == State.WAITING: # update destination to PIDs when starting new operation
-                            self.movement_PID.update_setpoint(self.distance_to_point(x, y))
-                            self.PID_movement_to_go = self.distance_to_point(x, y)
-                            self.rotation_PID.reset_integral()
-                            self.move_counter = 50
-                            self.set_state(State.ROTATING)
-
-                        arrived = False
 
                         # PID operational flowchart
                         # 1. if angle diff is higher than threshold, rotate till lower than threshold
                         # 2. if angle diff lower than threhold and distance higher than threhold, start moving linearly towards goal, rotation PID stays active to correct course if needed
                         # 3. if distance lower than threshold, stop both PIDs and mark arrived flag, assign next waypoint if available
-                                                
-                        if abs(self.angle_difference(x, y)) < self.PID_ORIENTATION_ROTATE_THRESHOLD or self.move_counter == 0: # check if move counter should stay
-                            if self.move_counter > 0:
-                                self.move_counter -= 1
-                            else:
-                                self.movement_PID_output = self.movement_PID.compute(self.distance_to_point(x, y) - self.PID_movement_to_go) / 100
-                                self.speed = max(min(self.movement_PID_output, self.PID_MAX_SPEED) * self.angle_difference_percentage(x, y, 4), 0) # if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED), modified by how off course the robot is
-                        else:
-                            self.speed = 0
-                            self.move_counter = 50
-                        
-                        if self.distance_to_point(x, y) < self.PID_DIST_THRESHOLD:
-                            arrived = True
-                            self.move_counter = 50
-                        
-                        self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 1000
-                        self.rotation = min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, -self.PID_MAX_ROTATE)
 
-                        if arrived:
-                            self.PID_queue.pop(0)
-                            self.set_state(State.WAITING)
+                        (x, y) = self.PID_queue[0]
+                        arrived = False
+
+                        if self.state == Bot_State.WAITING: # update destination to PIDs when starting new operation
+                            self.movement_PID.update_setpoint(self.distance_to_point(x, y))
+                            self.PID_movement_to_go = self.distance_to_point(x, y)
+                            self.rotation_PID.reset_integral()
+                            self.move_counter = 50
+                            self.set_state(Bot_State.ROTATING)
+                        elif self.state == Bot_State.ROTATING:
+                            self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 10000
+                            self.rotation = min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, -self.PID_MAX_ROTATE)
+                            if abs(self.angle_difference(x, y)) < self.PID_ORIENTATION_ROTATE_THRESHOLD or self.move_counter == 0:  # check if move counter should stay
+                                if self.move_counter > 0:
+                                    self.move_counter -= 1
+                                else:
+                                    self.set_state(Bot_State.READY)
+                            else:
+                                self.speed = 0
+                                self.move_counter = 50
+                        elif self.state == Bot_State.READY:
+                            # do formation checks here
+                            self.set_state(Bot_State.MOVING)
+                        elif self.state == Bot_State.MOVING:
+                            self.movement_PID_output = self.movement_PID.compute(
+                                self.distance_to_point(x, y) - self.PID_movement_to_go) / 50
+                            self.speed = max(min(self.movement_PID_output, self.PID_MAX_SPEED) * self.angle_difference_percentage(x, y, 4), 0)  # if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED), modified by how off course the robot is
+                            if self.distance_to_point(x, y) < self.PID_DIST_THRESHOLD:
+                                self.PID_queue.pop(0)
+                                self.set_state(Bot_State.WAITING)
 
                     else:
                         self.speed = 0

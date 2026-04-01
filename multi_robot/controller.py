@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import threading
+
 import roslaunch
 import rospy
 import sys
@@ -9,9 +11,12 @@ import random
 import time
 
 from robot_obj import robot_obj
-from robot_states import State
+from robot_states import Bot_State
+from controller_states import State
 
 robot_list = {}
+stop = False
+control_thread = None
 
 # all else fails run this via os
 # roslaunch rss_assignment multi_robot_spawn.launch robot_name:="hiiii" initial_x:="-x 1" initial_y:="-y 2" model:="burger"
@@ -50,10 +55,9 @@ def selected_bot_control(selected_bot):
             pass
         elif inputt == "2":
             while True:
-                # do normal movement b4 PID via {not_name}/cmd_vel
                 inputt = input(f"select movement mode\n1. teleop\n2. PID\n3. return to previous menu\n")
                 if inputt == "1":
-                    selected_bot.set_state(State.TELEOP)
+                    selected_bot.set_state(Bot_State.TELEOP)
                     instruction = "Reading from keyboard\n------------------------------\n    ^\n    |\n    w\n<-a   d->\n    s\n    |\n    v\n------------------------------\n\n10% \step per press\npress space to stop movement\npress any other key to exit"
                     print(instruction)
                     while True:
@@ -72,11 +76,11 @@ def selected_bot_control(selected_bot):
                             selected_bot.set_movement_vars(0, 0)
                         else:
                             print("exiting teleop mode...")
-                            selected_bot.set_state(State.IDLE)
+                            selected_bot.set_state(Bot_State.IDLE)
                             break
 
                 elif inputt == "2": # PID
-                    selected_bot.set_state(State.WAITING)
+                    selected_bot.set_state(Bot_State.WAITING)
                     while True:
                         inputt = input(f"{selected_bot.PID_debug_string()}\nselect PID operation\n1. add waypoint\n2. add random waypoints\n3. clear PID queue\n4. return to previous menu\nhold enter to update display\n")
                         if inputt == "1":
@@ -111,7 +115,7 @@ def selected_bot_control(selected_bot):
                         elif inputt == "4":
                             print("exiting PID mode...")
                             selected_bot.PID_clear()
-                            selected_bot.set_state(State.IDLE)
+                            selected_bot.set_state(Bot_State.IDLE)
                             break
 
                 elif inputt == "3":
@@ -120,24 +124,49 @@ def selected_bot_control(selected_bot):
                 else:
                     print("invalid input")
 
-        elif inputt == "3":
-            ...
         elif inputt == "9":
             print("exitting to main menu...")
             return
 
+def random_PID_movement_controller(): # thread to manage robots when on PID movement mode
+    random.seed(time.time())
+    while not stop:
+        # 1. set all bots to PID mode
+        # 2. give all bots random destinations
+        # 3. print bot message queue
+        # 4. if bot arrives print message and give new destination
+        # 5. when stop flag triggered set all bots to idle
+
+        for name in list(robot_list.keys()):
+            bot = robot_list[name]
+            if bot.get_state() in [Bot_State.WAITING, Bot_State.IDLE]:
+                new_dest = [random.randint(-10, 10), random.randint(-10, 10)]
+                if bot.get_state() == Bot_State.WAITING:
+                    print(f"bot {name} arrived at destination, given new destination: {new_dest}")
+                else:
+                    print(f"bot {name} given destination: {new_dest}")
+
+                bot.PID_enqueue(new_dest[0], new_dest[1])
+                bot.set_state(Bot_State.ROTATING)
+
+    print("stop signal received")
+    for name in robot_list.keys():
+        bot = robot_list[name]
+        bot.PID_clear()
+        bot.set_state(Bot_State.IDLE)
+        print(f"bot {name} halted")
+
+    print("thread joining...")
+
+
 if __name__=="__main__":
     settings = termios.tcgetattr(sys.stdin)
     rospy.init_node(f'multibot_node')
+    state = State.MANUAL
+    random.seed(time.time())
     while True:
-        status = f"""number of robots: {len(robot_list)}
-        current mode: {11}
-        """
-        options = """1. spawn new robot
-        2. view robot info
-        3. control individual robots
-        4. exit
-        """
+        status = f"number of robots: {len(robot_list)}\ncurrent mode: {state.value}"
+        options = "1. spawn new robot\n2. view robot info\n3. control individual robots\n4. multi robot control\n9. exit"
         inputt = input(f"{status}\n{options}")
         print(inputt)
         if inputt == "1":
@@ -184,7 +213,66 @@ if __name__=="__main__":
                     else:
                         print("invalid input, returning to main menu")
                         
-        elif inputt == "4" or input == '\x03':
+        elif inputt == "4":
+            while True:
+                inputt = input("1. random PID movement\n2. formation movement\n3. return to main menu\n")
+                if inputt == "1":
+                    control_thread = threading.Thread(target=random_PID_movement_controller)
+                    control_thread.start()
+                    print("control thread started")
+                    while True:
+                        inputt = input("1. add new bot\n2. print bot infos\n3. exit to previous menu\n")
+                        if inputt == "1":
+                            x, y = random.randint(-10, 10), random.randint(-10, 10)
+                            name = f"tb3_{str(len(robot_list))}"
+                            robot_list[name] = spawn_bot(name, x, y)
+                            print(f"new robot spawned at ({x}, {y})")
+                        elif inputt == "2":
+                            while True:
+                                bot_list_temp = []
+                                for bot in list(robot_list.keys()):
+                                    bot_list_temp.append(robot_list[bot])
+
+                                for i in len(bot_list_temp):
+                                    print(f"{i}. {bot_list_temp[i]}")
+
+                                inputt = input("input the corresponding number to view detailed stats\nhold enter to update\nenter any invalid character to exit\n")
+
+                                if inputt == "":
+                                    continue
+
+                                try:
+                                    inputt = int(inputt)
+                                except ValueError:
+                                    print("returning to previous menu")
+                                    break
+
+                                if 0 <= inputt < len(robot_list):
+                                    selected_bot = bot_list_temp[inputt]
+                                    while True:
+                                        inputt = input(f"{selected_bot.PID_debug_string()}hold enter to update\nenter any character to exit\n")
+                                        if inputt != "":
+                                            break
+                                else:
+                                    print("returning to previous menu")
+                                    break
+
+                        elif inputt == "3":
+                            break
+                        else:
+                            print("invalid input")
+                    stop = True
+                    control_thread.join()
+                    print("exiting to previous menu...")
+                elif inputt == "2":
+                    ...
+                elif inputt == "3":
+                    print("exiting to main menu...")
+                    break
+                else:
+                    print("invalid input")
+
+        elif inputt == "9" or input == '\x03':
             print("exiting...")
             break
         else:
