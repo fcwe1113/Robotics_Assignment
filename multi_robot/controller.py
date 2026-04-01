@@ -6,7 +6,6 @@ import select
 import termios
 import tty
 import random
-import os
 import time
 
 from robot_obj import robot_obj
@@ -33,7 +32,7 @@ def display_bot_infos() -> str:
         return "robot list empty"
     
     for obj in robot_list.items(): # check functionality
-        output += obj + "\n"
+        output += f"{obj}\n"
     
     return output
 

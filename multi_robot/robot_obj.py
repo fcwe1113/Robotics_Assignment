@@ -61,14 +61,17 @@ class robot_obj:
         self.bot_thread.start()
     
     def get_movement_vars(self) -> Tuple[float, float]:
-        return (self.speed, self.rotation)
+        return self.speed, self.rotation
     
     def set_movement_vars(self, speed, rotation):
-        self.speed = speed if speed <= 1 and speed >= -1 else 1 if speed > 1 else -1
-        self.rotation = rotation if rotation <= 1 and rotation >= -1 else 1 if rotation > 1 else -1
+        self.speed = speed if 1 >= speed >= -1 else 1 if speed > 1 else -1
+        self.rotation = rotation if 1 >= rotation >= -1 else 1 if rotation > 1 else -1
 
     def set_state(self, state):
         self.state = state
+
+    def get_state(self) -> State:
+        return self.state
     
     def stop_moving(self):
         self.speed = 0
