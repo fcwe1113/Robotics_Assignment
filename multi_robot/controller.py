@@ -10,6 +10,7 @@ import os
 import time
 
 from robot_obj import robot_obj
+from robot_states import State
 
 robot_list = {}
 
@@ -53,7 +54,7 @@ def selected_bot_control(selected_bot):
                 # do normal movement b4 PID via {not_name}/cmd_vel
                 inputt = input(f"select movement mode\n1. teleop\n2. PID\n3. return to previous menu\n")
                 if inputt == "1":
-                    selected_bot.set_moving(True)
+                    selected_bot.set_state(State.TELEOP)
                     instruction = "Reading from keyboard\n------------------------------\n    ^\n    |\n    w\n<-a   d->\n    s\n    |\n    v\n------------------------------\n\n10% \step per press\npress space to stop movement\npress any other key to exit"
                     print(instruction)
                     while True:
@@ -72,14 +73,13 @@ def selected_bot_control(selected_bot):
                             selected_bot.set_movement_vars(0, 0)
                         else:
                             print("exiting teleop mode...")
-                            selected_bot.stop_moving()
+                            selected_bot.set_state(State.IDLE)
                             break
 
                 elif inputt == "2": # PID
-                    selected_bot.set_moving(True)
-                    selected_bot.set_use_PID(True)
+                    selected_bot.set_state(State.WAITING)
                     while True:
-                        inputt = input(f"{selected_bot.PID_debug_string()}\nselect PID operation\n1. add waypoint\n2. add random waypoints\n3. return to previous menu\nhold enter to update display\n")
+                        inputt = input(f"{selected_bot.PID_debug_string()}\nselect PID operation\n1. add waypoint\n2. add random waypoints\n3. clear PID queue\n4. return to previous menu\nhold enter to update display\n")
                         if inputt == "1":
                             x = 0
                             y = 0
@@ -107,10 +107,12 @@ def selected_bot_control(selected_bot):
                             for i in range(n):
                                 selected_bot.PID_enqueue(random.randint(-10, 10), random.randint(-10, 10))
                         elif inputt == "3":
+                            print("cleared PID queue")
+                            selected_bot.PID_clear()
+                        elif inputt == "4":
                             print("exiting PID mode...")
                             selected_bot.PID_clear()
-                            selected_bot.stop_moving()
-                            selected_bot.set_use_PID(False)
+                            selected_bot.set_state(State.IDLE)
                             break
 
                 elif inputt == "3":

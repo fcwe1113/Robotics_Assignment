@@ -18,10 +18,7 @@ class robot_obj:
     bot_thread: threading.Thread
     speed: float # front back axis, shows percent of max speed
     rotation: float # left right axis, shows percent of rotation
-    moving: bool
-    PID: bool # shows robot moving with PID or raw speed/rotation vars
     PID_queue: List[Tuple[float, float]] # list of tuples containing (dest_x, dest_y)
-    PID_ongoing: bool # flag to identify ongoing PID operation
     PID_movement_to_go: float # number to input into movement_PID
     PID_DIST_THRESHOLD: float # in meters
     PID_ORIENTATION_ROTATE_THRESHOLD: float # in degrees, functions as the "good enough" point
@@ -30,8 +27,7 @@ class robot_obj:
     PID_MAX_SPEED_STEP: float # max acceleration available to PID movement system
     MAX_SPEED: float # max speed of the robot
     MAX_ROTATION: float # max rotation of the robot
-
-
+    state: State # shows current state of bot
 
     # maybe set pid min speed/rotation
 
@@ -41,11 +37,8 @@ class robot_obj:
         self.twist = Twist()
         self.speed = 0
         self.rotation = 0
-        self.moving = False
-        self.PID = False
 
         self.PID_queue = []
-        self.PID_ongoing = False
         self.PID_movement_to_go = 0
         self.PID_DIST_THRESHOLD = 0.1
         self.PID_ORIENTATION_ROTATE_THRESHOLD = 5
@@ -61,6 +54,7 @@ class robot_obj:
         self.rotation_PID = robot_PID()
         self.movement_PID = robot_PID()
         self.move_counter = 50
+        self.state = State.IDLE
 
         # start the bot thread
         self.bot_thread = threading.Thread(target=self.spin)
@@ -73,14 +67,14 @@ class robot_obj:
         self.speed = speed if speed <= 1 and speed >= -1 else 1 if speed > 1 else -1
         self.rotation = rotation if rotation <= 1 and rotation >= -1 else 1 if rotation > 1 else -1
 
-    def set_moving(self, moving):
-        self.moving = moving
+    def set_state(self, state):
+        self.state = state
     
     def stop_moving(self):
         self.speed = 0
         self.rotation = 0
         self.movement_control.publish(self.twist)
-        self.set_moving(False)
+        self.set_state(State.IDLE)
     
     def distance_to_point(self, x2, y2) -> float: # in meters
         (x1, y1) = self.position
@@ -98,7 +92,7 @@ class robot_obj:
         return 1 - (abs(self.angle_difference(x2, y2)) / 180 * 2)
     
     def update_callback(self, msg):
-        position = msg.pose.pose.position
+        position: Tuple[float, float] = msg.pose.pose.position
         quat = msg.pose.pose.orientation
         # line below modified from https://github.com/Tinker-Twins/Autonomy-Science-And-Systems/blob/main/Assignment%203-A/assignment_3a/turtlebot3/turtlebot3/turtlebot3_example/turtlebot3_example/turtlebot3_position_control/turtlebot3_position_control.py
         self.orientation = np.arctan2(2 * (quat.w * quat.z + quat.x * quat.y), 1 - 2 * (quat.y ** 2 + quat.z ** 2)) * 180 / math.pi + 180 # added 180 bc the original scale goes from -180 to 180
@@ -117,9 +111,6 @@ class robot_obj:
             (x, y) = self.PID_queue[0]
         return f"\n\nPID stats:\ncurrent location: {self.position}\ncurrent destination: {self.PID_queue[0]}\nqueue: {self.PID_queue}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}\nmove counter: {self.move_counter}" if self.PID_queue else "PID has no queued waypoints"
     
-    def set_use_PID(self, value):
-        self.PID = value
-    
     def PID_enqueue(self, x, y):
         self.PID_queue.append((x, y))
     
@@ -132,18 +123,18 @@ class robot_obj:
         rate = rospy.Rate(10)  # 10 Hz meaning it reads data every 100ms
         while not rospy.is_shutdown():
             # do pid stuff here
-            if self.moving:
-                if self.PID:
+            if not self.state == State.IDLE:
+                if self.state in [State.ROTATING, State.READY, State.MOVING, State.WAITING]:
                     if self.PID_queue: # does not run if queue is empty
 
                         (x, y) = self.PID_queue[0]
 
-                        if not self.PID_ongoing: # update destination to PIDs when starting new operation
+                        if self.state == State.WAITING: # update destination to PIDs when starting new operation
                             self.movement_PID.update_setpoint(self.distance_to_point(x, y))
                             self.PID_movement_to_go = self.distance_to_point(x, y)
                             self.rotation_PID.reset_integral()
                             self.move_counter = 50
-                            self.PID_ongoing = True
+                            self.set_state(State.ROTATING)
 
                         arrived = False
 
@@ -171,7 +162,7 @@ class robot_obj:
 
                         if arrived:
                             self.PID_queue.pop(0)
-                            self.PID_ongoing = False
+                            self.set_state(State.WAITING)
 
                     else:
                         self.speed = 0
