@@ -14,16 +14,21 @@ from robot_obj import robot_obj
 from robot_states import Bot_State
 from controller_states import State
 
-robot_list = {}
-stop = False
-control_thread = None
-
-# all else fails run this via os
-# roslaunch rss_assignment multi_robot_spawn.launch robot_name:="hiiii" initial_x:="-x 1" initial_y:="-y 2" model:="burger"
-# note the above command does not enable sending individual commands to robots
-# commands would just be applied globally
+robot_list = {} # dict to hold robot objects
+stop = False # stop flag for threaded controllers
+control_thread = None # variable to hold threaded controller functions
 
 def spawn_bot(name, x, y) -> robot_obj:
+    """
+    Spawns a new turtlebot within the simulation
+
+    :arg str name: Name of the turtlebot
+    :arg float x: x coordinate of the spawn location
+    :arg float y: y coordinate of the spawn location
+
+    :returns: Robot object to control the spawned turtlebot
+    :rtype: robot_obj
+    """
     uuid = roslaunch.rlutil.get_or_generate_uuid(None, False)
     cli_args = ["rss_assignment", "multi_robot_spawn.launch", f'robot_name:={name}', f"initial_x:=-x {x}", f"initial_y:=-y {y}", "model:=burger"]
     roslaunch_file = [(roslaunch.rlutil.resolve_launch_arguments(cli_args)[0], cli_args[2:])]
@@ -32,6 +37,12 @@ def spawn_bot(name, x, y) -> robot_obj:
     return robot_obj(name)
 
 def display_bot_infos() -> str:
+    """
+    displays information about all robots, unless the robot list is empty
+
+    :returns: aggregated bot information
+    :rtype: str
+    """
     output = ""
     if len(robot_list) == 0:
         return "robot list empty"
@@ -42,6 +53,12 @@ def display_bot_infos() -> str:
     return output
 
 def getKey():
+    """
+    Blocks program and waits for next key input, and returns the input
+
+    :return: key input
+    :rtype: AnyStr
+    """
     tty.setraw(sys.stdin.fileno())
     select.select([sys.stdin], [], [], 0)
     key = sys.stdin.read(1)
@@ -49,6 +66,12 @@ def getKey():
     return key
 
 def selected_bot_control(selected_bot):
+    """
+    Sub method of individual robot control in __main__
+
+    :param selected_bot: the selected robot object to be controlled
+    :rtype: None
+    """
     while True:
         inputt = input(f"selected bot:\n{selected_bot.to_string_long()}\n1. update information\n2. move robot\n9. exit to main menu\n")
         if inputt == "1":
@@ -130,6 +153,11 @@ def selected_bot_control(selected_bot):
             return
 
 def random_PID_movement_controller(): # thread to manage robots when on PID movement mode
+    """
+    Function to be run in a seperate thread to control all robots on simulation, switch the code flag to true to stop the function
+
+    :rtype: None
+    """
     random.seed(time.time())
     while not stop:
         # 1. set all bots to PID mode
