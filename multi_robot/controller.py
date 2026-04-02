@@ -141,15 +141,16 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
         for name in list(robot_list.keys()):
             bot = robot_list[name]
             if bot.get_state() in [Bot_State.WAITING, Bot_State.IDLE]:
-                new_dest = [random.randint(-10, 10), random.randint(-10, 10)]
-                if bot.get_state() == Bot_State.WAITING:
-                    print(f"bot {name} arrived at destination, given new destination: {new_dest}")
-                else:
-                    print(f"bot {name} given destination: {new_dest}")
-
-                bot.PID_enqueue(new_dest[0], new_dest[1])
-                bot.set_state(Bot_State.ROTATING)
-            elif bot.get_state() in Bot_State.READY:
+                if bot.PID_if_queue_empty():
+                    # print(f"{bot.name}: {bot.PID_if_queue_empty()}")
+                    new_dest = [random.randint(-10, 10), random.randint(-10, 10)]
+                    bot.PID_enqueue(new_dest[0], new_dest[1])
+                    if bot.get_state() == Bot_State.WAITING:
+                        print(f"bot {name} arrived at destination, given new destination: {new_dest}")
+                    else:
+                        bot.set_state(Bot_State.WAITING)
+                        print(f"bot {name} given destination: {new_dest}")
+            elif bot.get_state() == Bot_State.READY:
                 bot.give_green_light()
 
     print("stop signal received")
@@ -220,6 +221,7 @@ if __name__=="__main__":
             while True:
                 inputt = input("1. random PID movement\n2. formation movement\n3. return to main menu\n")
                 if inputt == "1":
+                    stop = False
                     control_thread = threading.Thread(target=random_PID_movement_controller)
                     control_thread.start()
                     print("control thread started")
@@ -236,9 +238,9 @@ if __name__=="__main__":
                                 for bot in list(robot_list.keys()):
                                     bot_list_temp.append(robot_list[bot])
 
-                                for i in len(bot_list_temp):
+                                for i in range(len(bot_list_temp)):
                                     bot_list_temp[i].set_controlled(True)
-                                    print(f"{i}. {bot_list_temp[i]}")
+                                    print(f"{i}. {bot_list_temp[i].PID_info_string()}")
 
                                 inputt = input("input the corresponding number to view detailed stats\nhold enter to update\nenter any invalid character to exit\n")
 
