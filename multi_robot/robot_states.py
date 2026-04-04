@@ -10,6 +10,7 @@ class Bot_State(Enum):
     READY = "ready"
     MOVING = "moving"
     WAITING = "waiting"
+    EVADING = "evading"
 
     # teleop states
     TELEOP = "teleop"

@@ -110,6 +110,7 @@ def selected_bot_control(selected_bot):
                         if inputt == "1":
                             x = 0
                             y = 0
+                            stopping = False
                             inputt = input("input the x coordinate of the waypoint: ")
                             try:
                                 x = float(inputt)
@@ -122,7 +123,14 @@ def selected_bot_control(selected_bot):
                             except ValueError:
                                 print("invalid input")
                                 continue
-                            selected_bot.PID_enqueue(x, y)
+                            inputt = input("does the robot stop at this waypoint (Y/n): ")
+                            inputt = inputt.lower() if inputt != "" else "y"
+                            if inputt == "y":
+                                stopping = True
+                            elif inputt != "n":
+                                print("invalid input")
+                                continue
+                            selected_bot.PID_enqueue(x, y, stopping)
                         elif inputt == "2":
                             inputt = input("input the number of coords to travel to: ")
                             try:
@@ -132,7 +140,7 @@ def selected_bot_control(selected_bot):
                                 continue
                             random.seed(time.time())
                             for i in range(n):
-                                selected_bot.PID_enqueue(random.randint(-10, 10), random.randint(-10, 10))
+                                selected_bot.PID_enqueue(random.randint(-10, 10), random.randint(-10, 10), True if random.randint(0, 1) == 1 else False)
                         elif inputt == "3":
                             print("cleared PID queue")
                             selected_bot.PID_clear()
@@ -158,13 +166,28 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
 
     :rtype: None
     """
+    # todo collision avoidance???
+
+    # todo centralised control
+    # todo 1. controller track environment via in thread memory grid (allowing bots to be in .5 coords mean the grid tracked by controller is -40 to 40 on both axis)
+    # todo 2. bots are allowed to traverse up down left right and diagonal 45deg, maybe allow other diag angles in expense of reserving more than the bot needs
+    # todo 3. controller on giving new dest coords also give waypoints from a* to bot, controller also allows certain bots to reserve entire path to simulate priority
+    # todo 4. bot will reserve 3 coords, coord it just left, coord currently traversing to, and next valid coord past that. bots will wait at second coord until third coord reserved
+    # todo 5. bot will report arrived coord for controller to free up coord reserve
+    # todo 6. bot and controller will contact via predefined API via maybe a processing queue on controller thread
+
+    # todo distributed control
+    # todo 1. controller role limited to only providing new destination coords and robots will travel in straight line towards dest
+    # todo 2. robots will publish their position and 1m trajectory to every other robot
+    # todo 3. robots will keep track of the 1m trajectory of the all robots within 3m
+    # todo 4. if 2 1m trajectories are found to be colliding, the robot furthest from the intersect point would be evading collision
+    # todo 5: if the intersect angle > 90deg, evading robot would make course for parallel movement against the other robot (set rotation PID angle to opposing robot orientation), and resume normal course when the distance between the 2 increases
+    # todo 6: if the intersect angle <= 90deg, evading robot would set angle to halfway point of opposing robot trajectory, and resume normal course when the distance between the 2 increases
+    # todo 7: if one robot is arriving and one isnt, the non arriving robot would plot non stopping waypoint either opposing robot current location (when opposing trajectory > 0.5 long) or 0.5 distance away to opposing robot's current destination with angle set to opposing robot angle to attack towards destination (when opposing trajectory <= 0.5 long), and resume course when the distance between teh 2 bots increases
+    # todo 8: if more than 1 robot arriving in destinations within 0.5 distance of each other, make a queue and wait for the robot arriving first to leave
+
     random.seed(time.time())
     while not stop:
-        # 1. set all bots to PID mode
-        # 2. give all bots random destinations
-        # 3. print bot message queue
-        # 4. if bot arrives print message and give new destination
-        # 5. when stop flag triggered set all bots to idle
 
         for name in list(robot_list.keys()):
             bot = robot_list[name]

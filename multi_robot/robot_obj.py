@@ -39,6 +39,7 @@ class robot_obj:
     :cvar movement_PID_output: movement_PID output
     :cvar rotation_PID_output: rotation_PID output
     :cvar move_counter: counter for rotation to stabilise before enabling linear movement
+    :cvar prev_distance: distance towards the destination recorded from last tick
 
     """
 
@@ -48,14 +49,8 @@ class robot_obj:
     bot_thread: threading.Thread
     speed: float
     rotation: float
-    PID_queue: List[Tuple[float, float]]
+    PID_queue: List[Tuple[float, float, bool]]
     PID_movement_to_go: float
-    PID_DIST_THRESHOLD: float
-    PID_ORIENTATION_ROTATE_THRESHOLD: float
-    PID_MAX_SPEED: float
-    PID_MAX_ROTATE: float
-    MAX_SPEED: float
-    MAX_ROTATION: float
     state: Bot_State
     green_light: bool
     controlled: bool
@@ -89,9 +84,11 @@ class robot_obj:
         self.rotation_PID = robot_PID()
         self.movement_PID = robot_PID()
         self.move_counter = 10
+        self.prev_distance = 0
         self.state = Bot_State.IDLE
         self.green_light = False
         self.controlled = False
+        self.self_evading = False
 
         # start the bot thread
         self.bot_thread = threading.Thread(target=self.spin)
@@ -216,9 +213,9 @@ class robot_obj:
         :raise ValueError: If Value of cap is not >= 0 and <= 180
         :rtype: float
         """
-        if not (0 >= cap >= 180):
-            raise ValueError("Cap angle provided is over 180")
-        return 1 - (min(abs(self.angle_difference(x2, y2)), cap) / cap)
+        if 0 <= cap <= 180:
+            return 1 - (min(abs(self.angle_difference(x2, y2)), cap) / cap)
+        raise ValueError("Cap angle provided is over 180")
     
     def update_callback(self, msg):
         """
@@ -256,8 +253,8 @@ class robot_obj:
 
         :rtype: str
         """
-        (x, y) = self.PID_queue[0]
-        return f"name: {self.name}\tcurrent position: {self.position}\tcurrent orientation: {self.orientation}\tdestination: ({x}, {y})\tcurrent state: {self.state.value}\n"
+        (x, y, stopping) = self.PID_queue[0]
+        return f"name: {self.name}\tcurrent position: {self.position}\tcurrent orientation: {self.orientation}\tdestination: ({x}, {y})\tstopping: {stopping}\tcurrent state: {self.state.value}\n"
 
     def PID_debug_string(self):
         """
@@ -266,10 +263,11 @@ class robot_obj:
         :rtype: str
         """
         if self.PID_queue:
-            (x, y) = self.PID_queue[0]
-        return f"\n\nPID stats:\ncurrent location: {self.position}\ncurrent destination: {self.PID_queue[0]}\nqueue: {self.PID_queue}\nstate: {self.state.value}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}\nmove counter: {self.move_counter}\n" if self.PID_queue else "PID has no queued waypoints\n"
-    
-    def PID_enqueue(self, x, y):
+            (x, y, stopping) = self.PID_queue[0]
+            return f"\n\nPID stats:\ncurrent location: {self.position}\ncurrent destination: ({x}, {y})\nstopping: {stopping}\nqueue: {self.PID_queue}\nstate: {self.state.value}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}\nmove counter: {self.move_counter}\n"
+        return "PID has no queued waypoints\n"
+
+    def PID_enqueue(self, x, y, stopping):
         """
         Enqueues provided coordinates to the robot PID system
 
@@ -277,7 +275,7 @@ class robot_obj:
         :param y: y coordinate of the point
         :rtype: None
         """
-        self.PID_queue.append((x, y))
+        self.PID_queue.append((x, y, stopping))
         # print(f"{x}, {y} enqueued")
     
     def PID_clear(self):
@@ -311,7 +309,7 @@ class robot_obj:
         while not rospy.is_shutdown():
             # do pid stuff here
             if not self.state == Bot_State.IDLE:
-                if self.state in [Bot_State.ROTATING, Bot_State.READY, Bot_State.MOVING, Bot_State.WAITING]:
+                if self.state in [Bot_State.ROTATING, Bot_State.READY, Bot_State.MOVING, Bot_State.WAITING, Bot_State.EVADING]:
                     if self.PID_queue: # does not run if queue is empty
 
                         # PID operational flowchart
@@ -319,12 +317,15 @@ class robot_obj:
                         # 2. if angle diff lower than threhold and distance higher than threhold, start moving linearly towards goal, rotation PID stays active to correct course if needed
                         # 3. if distance lower than threshold, stop both PIDs and mark arrived flag, assign next waypoint if available
 
-                        (x, y) = self.PID_queue[0]
+                        (x, y, stopping) = self.PID_queue[0]
 
                         if self.state == Bot_State.WAITING: # update destination to PIDs when starting new operation
                             self.movement_PID.update_setpoint(self.distance_to_point(x, y))
                             self.PID_movement_to_go = self.distance_to_point(x, y)
-                            self.set_state(Bot_State.ROTATING)
+                            if self.move_counter == 0:
+                                self.set_state(Bot_State.MOVING)
+                            else:
+                                self.set_state(Bot_State.ROTATING)
                         elif self.state == Bot_State.ROTATING:
                             self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 10
                             self.rotation = (min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, -self.PID_MAX_ROTATE)) * (1 if self.angle_difference(x, y) > 45 else (self.angle_difference(x, y) / 45))
@@ -346,19 +347,31 @@ class robot_obj:
                                 self.set_state(Bot_State.MOVING)
                         elif self.state == Bot_State.MOVING:
 
+                            if self.controlled:
+                                if self.self_evading:
+                                    pass # todo fill in distributed collision avoidance algorithm here
+                                else:
+                                    # todo fill in centralised management permission approval here
+                                    if False:
+                                        self.set_state(Bot_State.EVADING)
+
                             # rotation PID
-                            self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 10
+                            self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 10 # + or - 90 to make the bot go in a right angled arc
                             self.rotation = (min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, -self.PID_MAX_ROTATE)) * (1 if self.angle_difference(x, y) > 45 else max(self.angle_difference(x, y) / 45, 0.5))
 
                             #movement PID
                             self.movement_PID_output = self.movement_PID.compute(self.distance_to_point(x, y) - self.PID_movement_to_go) / 2
-                            self.speed = (max(min(self.movement_PID_output, self.PID_MAX_SPEED) * self.angle_difference_percentage(x, y, 45), 0.001)) * min(1.0, self.distance_to_point(x, y)) # if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED), modified by how off course the robot is
+                            self.speed = (max(min(self.movement_PID_output, self.PID_MAX_SPEED) * self.angle_difference_percentage(x, y, 180), 0.01)) * (min(1.0, self.distance_to_point(x, y) if stopping else 1)) # if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED), modified by how off course the robot is
 
                             if self.distance_to_point(x, y) < self.PID_DIST_THRESHOLD: # if destination reached
+                                if stopping:
+                                    self.rotation_PID.reset_integral()
+                                    self.move_counter = 50
+
                                 self.PID_queue.pop(0)
-                                self.rotation_PID.reset_integral()
-                                self.move_counter = 50
                                 self.set_state(Bot_State.WAITING)
+
+                        self.prev_distance = self.distance_to_point(x, y)
 
                     else:
                         self.speed = 0
