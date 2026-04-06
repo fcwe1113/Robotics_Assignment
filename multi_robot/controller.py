@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-
+import queue
 import threading
+from typing import Any, Tuple
+
 import roslaunch
 import rospy
 import sys
@@ -20,7 +22,7 @@ robot_list = {} # dict to hold robot objects
 stop = False # stop flag for threaded controllers
 control_thread = None # variable to hold threaded controller functions
 request_queue = PriorityQueue() # thread safe priority queue for centralized mode
-reservations = {} # reservation dict with identifications on which bot reserved which coords
+reservations = None # reservation dict with identifications on which bot reserved which coords
 
 def spawn_bot(name, x, y) -> robot_obj:
     """
@@ -38,7 +40,6 @@ def spawn_bot(name, x, y) -> robot_obj:
     roslaunch_file = [(roslaunch.rlutil.resolve_launch_arguments(cli_args)[0], cli_args[2:])]
     parent = roslaunch.parent.ROSLaunchParent(uuid, roslaunch_file)
     parent.start()
-    reservations[name] = []
     return robot_obj(name, request_queue)
 
 def display_bot_infos() -> str:
@@ -115,7 +116,7 @@ def selected_bot_control(selected_bot):
                         if inputt == "1":
                             x = 0
                             y = 0
-                            waypoint_state = Waypoint_State.DESTINATION
+                            waypoint_state = Waypoint_State.GRANTED_DESTINATION
                             inputt = input("input the x coordinate of the waypoint: ")
                             try:
                                 x = float(inputt)
@@ -147,7 +148,7 @@ def selected_bot_control(selected_bot):
                                 continue
                             random.seed(time.time())
                             for i in range(n):
-                                selected_bot.PID_enqueue(random.randint(-10, 10), random.randint(-10, 10), Waypoint_State.DESTINATION if random.randint(0, 1) == 1 else Waypoint_State.WAYPOINT)
+                                selected_bot.PID_enqueue(random.randint(-10, 10), random.randint(-10, 10), Waypoint_State.GRANTED_DESTINATION if random.randint(0, 1) == 1 else Waypoint_State.WAYPOINT)
                         elif inputt == "3":
                             print("cleared PID queue")
                             selected_bot.PID_clear()
@@ -196,20 +197,81 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
     random.seed(time.time())
     while not stop:
 
-        for name in list(robot_list.keys()):
-            bot = robot_list[name]
-            if bot.get_state() in [Bot_State.WAITING, Bot_State.IDLE]:
-                if bot.PID_if_queue_empty():
-                    # print(f"{bot.name}: {bot.PID_if_queue_empty()}")
-                    new_dest = [random.randint(-10, 10), random.randint(-10, 10)]
-                    bot.PID_enqueue(new_dest[0], new_dest[1], Waypoint_State.DESTINATION)
-                    if bot.get_state() == Bot_State.WAITING:
-                        print(f"bot {name} arrived at destination, given new destination: {new_dest}")
-                    else:
-                        bot.set_state(Bot_State.WAITING)
-                        print(f"bot {name} given destination: {new_dest}")
-            elif bot.get_state() == Bot_State.READY:
-                bot.give_green_light()
+        if reservations: # centralised control mode
+
+            # free up space logic
+            for reservation in list(reservations.items()):
+                # print(reservation) # debug
+                if reservation[1] is not None and len(reservation[1]) > 1:
+                    bot: robot_obj
+                    bot = robot_list[reservation[0]]
+                    if bot.is_ready():
+                        # print(f"test: {reservation[0]}, {reservation[1]}\ntype0: {type(reservation[1][0])}\ntype1: {type(reservation[1][1])}")
+                        if bot.bot_distance_to_point(reservation[1][0][0], reservation[1][0][1]) > bot.bot_distance_to_point(reservation[1][1][0], reservation[1][1][1]):
+                            print(f"bot {bot.name} left {reservation[1][0]}")
+                            reservation[1].pop(0)
+
+            # reservation logic
+            request_queue.put((2, "STOP"))
+            queue_list = []
+            # request_queue.mutex.acquire_lock()
+            while True:
+                request = request_queue.get()
+                # print(request) # debug
+                if request == (2, "STOP"):
+                    break
+                else:
+                    queue_list.append(request)
+            # request_queue.mutex.release_lock()
+
+            while len(queue_list) > 0: # clear the queue
+                # print(f"list: {queue_list}")
+                request: Tuple[int, Tuple[float, float, Waypoint_State], str, int] = queue_list.pop(0)
+                skip = False
+                for key in list(reservations.keys()): # todo check if for loop modifies var outside
+                    if (request[1][0], request[1][1]) in reservations[key]:
+                        request_queue.put(request) # loop the unsolvable request back into the queue
+                        skip = True
+                        break
+
+                if not skip:
+                    # print(request)
+                    reservations[request[2]].append((request[1][0], request[1][1]))
+                    robot_list[request[2]].update_waypoint((request[1][0], request[1][1], Waypoint_State.WAYPOINT if request[1][2] == Waypoint_State.REQUESTED else Waypoint_State.GRANTED_DESTINATION), request[3])
+                    print(f"granted bot {request[2]} permission to travel to {(request[1][0], request[1][1])}")
+
+            for name in list(robot_list.keys()):
+                bot = robot_list[name]
+                # (re)initialize bots when they are done/spawned
+                if not bot.is_ready():
+                    continue
+                if bot.get_state() in [Bot_State.WAITING, Bot_State.IDLE]:
+                    if bot.PID_if_queue_empty():
+                        # print(f"{bot.name}: {bot.PID_if_queue_empty()}")
+                        new_dest = [random.randint(-10, 10), random.randint(-10, 10)]
+                        current_coord = [round_point_5(bot.position[0]), round_point_5(bot.position[1])]
+
+                        while current_coord[0] != new_dest[0] and current_coord[1] != new_dest[1]:
+                            current_coord[0] += 0.5 if current_coord[0] < new_dest[0] else -0.5
+                            current_coord[1] += 0.5 if current_coord[1] < new_dest[1] else -0.5
+                            bot.PID_enqueue(current_coord[0], current_coord[1], Waypoint_State.DESTINATION if current_coord[0] == new_dest[0] or current_coord[1] == new_dest[1] else Waypoint_State.HOLD)
+
+                        while current_coord[0] != new_dest[0]:
+                            current_coord[0] += 0.5 if current_coord[0] < new_dest[0] else -0.5
+                            bot.PID_enqueue(current_coord[0], current_coord[1], Waypoint_State.HOLD if current_coord[0] != new_dest[0] else Waypoint_State.DESTINATION)
+                        while current_coord[1] != new_dest[1]:
+                            current_coord[1] += 0.5 if current_coord[1] < new_dest[1] else -0.5
+                            bot.PID_enqueue(current_coord[0], current_coord[1], Waypoint_State.HOLD if current_coord[1] != new_dest[1] else Waypoint_State.DESTINATION)
+
+                        # bot.PID_enqueue(new_dest[0], new_dest[1], Waypoint_State.DESTINATION)
+                        if bot.get_state() == Bot_State.WAITING:
+                            print(f"bot {name} arrived at destination, given new destination: {new_dest}")
+                        else:
+                            bot.set_state(Bot_State.WAITING)
+                            print(f"bot {name} given destination: {new_dest}")
+                elif bot.get_state() == Bot_State.READY:
+                    # print("greeeeeeeeeeeeeeen")
+                    bot.give_green_light()
 
     print("stop signal received")
     for name in robot_list.keys():
@@ -219,6 +281,9 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
         print(f"bot {name} halted")
 
     print("thread joining...")
+
+def round_point_5(num):
+    return 0.5 * round(num / 0.5)
 
 if __name__=="__main__":
     settings = termios.tcgetattr(sys.stdin)
@@ -279,15 +344,27 @@ if __name__=="__main__":
                 inputt = input("1. centralised control movement\n2. distributed control movement\n3. formation movement\n4. return to main menu\n")
                 if inputt == "1":
                     stop = False
+                    reservations = {}
+                    for name in robot_list.keys():
+                        robot = robot_list[name]
+                        reservations[name] = [(round_point_5(robot.position[0]), round_point_5(robot.position[1]))]
                     control_thread = threading.Thread(target=random_PID_movement_controller)
                     control_thread.start()
                     print("control thread started")
                     while True:
                         inputt = input("1. add new bot\n2. print bot infos\n3. view reserved coordinates\n4. exit to previous menu\n")
                         if inputt == "1":
-                            x, y = random.randint(-10, 10), random.randint(-10, 10)
+                            while True:
+                                x, y = random.randint(-10, 10), random.randint(-10, 10)
+                                for key in list(reservations.keys()):
+                                    if (x, y) in reservations[key]:
+                                        continue
+                                break
                             name = f"tb3_{str(len(robot_list))}"
-                            robot_list[name] = spawn_bot(name, x, y)
+                            reservations[name] = [(x, y)]
+                            bot = spawn_bot(name, x, y)
+                            robot_list[name] = bot
+                            robot_list[name].set_controlled(True)
                             print(f"new robot spawned at ({x}, {y})")
                         elif inputt == "2":
                             while True:
@@ -296,7 +373,6 @@ if __name__=="__main__":
                                     bot_list_temp.append(robot_list[bot])
 
                                 for i in range(len(bot_list_temp)):
-                                    bot_list_temp[i].set_controlled(True)
                                     print(f"{i}. {bot_list_temp[i].PID_info_string()}")
 
                                 inputt = input("input the corresponding number to view detailed stats\nhold enter to update\nenter any invalid character to exit\n")
@@ -328,6 +404,7 @@ if __name__=="__main__":
                             print("invalid input")
                     stop = True
                     control_thread.join()
+                    reservations = None
                     print("exiting to previous menu...")
                 elif inputt == "2":
                     ...
