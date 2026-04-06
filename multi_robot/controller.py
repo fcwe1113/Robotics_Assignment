@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-import threading
 
+import threading
 import roslaunch
 import rospy
 import sys
@@ -13,10 +13,14 @@ import time
 from robot_obj import robot_obj
 from robot_states import Bot_State
 from controller_states import State
+from queue import PriorityQueue
+from robot_waypoint_states import Waypoint_State
 
 robot_list = {} # dict to hold robot objects
 stop = False # stop flag for threaded controllers
 control_thread = None # variable to hold threaded controller functions
+request_queue = PriorityQueue() # thread safe priority queue for centralized mode
+reservations = {} # reservation dict with identifications on which bot reserved which coords
 
 def spawn_bot(name, x, y) -> robot_obj:
     """
@@ -34,7 +38,8 @@ def spawn_bot(name, x, y) -> robot_obj:
     roslaunch_file = [(roslaunch.rlutil.resolve_launch_arguments(cli_args)[0], cli_args[2:])]
     parent = roslaunch.parent.ROSLaunchParent(uuid, roslaunch_file)
     parent.start()
-    return robot_obj(name)
+    reservations[name] = []
+    return robot_obj(name, request_queue)
 
 def display_bot_infos() -> str:
     """
@@ -110,7 +115,7 @@ def selected_bot_control(selected_bot):
                         if inputt == "1":
                             x = 0
                             y = 0
-                            stopping = False
+                            waypoint_state = Waypoint_State.DESTINATION
                             inputt = input("input the x coordinate of the waypoint: ")
                             try:
                                 x = float(inputt)
@@ -123,14 +128,16 @@ def selected_bot_control(selected_bot):
                             except ValueError:
                                 print("invalid input")
                                 continue
-                            inputt = input("does the robot stop at this waypoint (Y/n): ")
-                            inputt = inputt.lower() if inputt != "" else "y"
-                            if inputt == "y":
-                                stopping = True
-                            elif inputt != "n":
+                            inputt = input("what type of waypoint is this (D/w/h): ")
+                            inputt = inputt.lower() if inputt != "" else "d"
+                            if inputt == "w":
+                                waypoint_state = Waypoint_State.WAYPOINT
+                            elif inputt == "h":
+                                waypoint_state = Waypoint_State.HOLD
+                            elif inputt != "d":
                                 print("invalid input")
                                 continue
-                            selected_bot.PID_enqueue(x, y, stopping)
+                            selected_bot.PID_enqueue(x, y, waypoint_state)
                         elif inputt == "2":
                             inputt = input("input the number of coords to travel to: ")
                             try:
@@ -140,7 +147,7 @@ def selected_bot_control(selected_bot):
                                 continue
                             random.seed(time.time())
                             for i in range(n):
-                                selected_bot.PID_enqueue(random.randint(-10, 10), random.randint(-10, 10), True if random.randint(0, 1) == 1 else False)
+                                selected_bot.PID_enqueue(random.randint(-10, 10), random.randint(-10, 10), Waypoint_State.DESTINATION if random.randint(0, 1) == 1 else Waypoint_State.WAYPOINT)
                         elif inputt == "3":
                             print("cleared PID queue")
                             selected_bot.PID_clear()
@@ -195,7 +202,7 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
                 if bot.PID_if_queue_empty():
                     # print(f"{bot.name}: {bot.PID_if_queue_empty()}")
                     new_dest = [random.randint(-10, 10), random.randint(-10, 10)]
-                    bot.PID_enqueue(new_dest[0], new_dest[1])
+                    bot.PID_enqueue(new_dest[0], new_dest[1], Waypoint_State.DESTINATION)
                     if bot.get_state() == Bot_State.WAITING:
                         print(f"bot {name} arrived at destination, given new destination: {new_dest}")
                     else:
@@ -212,7 +219,6 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
         print(f"bot {name} halted")
 
     print("thread joining...")
-
 
 if __name__=="__main__":
     settings = termios.tcgetattr(sys.stdin)
@@ -270,14 +276,14 @@ if __name__=="__main__":
                         
         elif inputt == "4":
             while True:
-                inputt = input("1. random PID movement\n2. formation movement\n3. return to main menu\n")
+                inputt = input("1. centralised control movement\n2. distributed control movement\n3. formation movement\n4. return to main menu\n")
                 if inputt == "1":
                     stop = False
                     control_thread = threading.Thread(target=random_PID_movement_controller)
                     control_thread.start()
                     print("control thread started")
                     while True:
-                        inputt = input("1. add new bot\n2. print bot infos\n3. exit to previous menu\n")
+                        inputt = input("1. add new bot\n2. print bot infos\n3. view reserved coordinates\n4. exit to previous menu\n")
                         if inputt == "1":
                             x, y = random.randint(-10, 10), random.randint(-10, 10)
                             name = f"tb3_{str(len(robot_list))}"
@@ -313,8 +319,10 @@ if __name__=="__main__":
                                 else:
                                     print("returning to previous menu")
                                     break
-
                         elif inputt == "3":
+                            for item in reservations.items():
+                                print(f"{item[0]}: {item[1]}")
+                        elif inputt == "4":
                             break
                         else:
                             print("invalid input")
@@ -324,6 +332,8 @@ if __name__=="__main__":
                 elif inputt == "2":
                     ...
                 elif inputt == "3":
+                    ...
+                elif inputt == "4":
                     print("exiting to main menu...")
                     break
                 else:

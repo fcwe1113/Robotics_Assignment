@@ -8,6 +8,8 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from robot_PID import robot_PID
 from robot_states import Bot_State
+from robot_waypoint_states import Waypoint_State
+from queue import PriorityQueue
 
 class robot_obj:
     """
@@ -19,6 +21,7 @@ class robot_obj:
     :cvar PID_ORIENTATION_ROTATE_THRESHOLD: Robots will treat angle differences under this value as oriented
     :cvar PID_MAX_SPEED: Robots in PID mode will not exceed this speed percentage
     :cvar PID_MAX_ROTATE: Robots in PID mode will not exceed this rotation percentage
+    :cvar PID_MOVING_MIN_SPEED: Robots in moving mode will always maintain at least this speed percentage
 
     :cvar green_light: Flag for outside controller to signify permission to continue to next state
     :cvar controlled: Flag to show if robot is being controlled by controller or directly by user
@@ -40,6 +43,8 @@ class robot_obj:
     :cvar rotation_PID_output: rotation_PID output
     :cvar move_counter: counter for rotation to stabilise before enabling linear movement
     :cvar prev_distance: distance towards the destination recorded from last tick
+    :cvar queue: thread safe priority queue to reserve next coord
+    :cvar reserve_nodes: distance to try and reserve from the controller, will also be used to identify queue priority
 
     """
 
@@ -49,21 +54,29 @@ class robot_obj:
     bot_thread: threading.Thread
     speed: float
     rotation: float
-    PID_queue: List[Tuple[float, float, bool]]
+    PID_queue: List[Tuple[float, float, Waypoint_State]]
     PID_movement_to_go: float
     state: Bot_State
     green_light: bool
     controlled: bool
+    queue: PriorityQueue
 
     # attributes (or constants)
     PID_DIST_THRESHOLD = 0.1
     PID_ORIENTATION_ROTATE_THRESHOLD = 5
     PID_MAX_SPEED = 3
     PID_MAX_ROTATE = 0.3
+    PID_MOVING_MIN_SPEED = 0.01
     MAX_SPEED = 0.22
     MAX_ROTATION = 2.84
 
-    def __init__(self, name):
+    # todo movement procedures
+    # 1. controller insert all intermediate waypoints as HOLD
+    # 2. before start reserve the next coord, wait until that goes through, when reserved flip reserved waypoint to WAYPOINT
+    # 3. as robot starts rolling reserve next coord, speed modified proportionally to distance to queue head
+    # 4. keep using the already implemented "slow down when within 1m" function but use the closest HOLD/DEST point as reference
+
+    def __init__(self, name, queue):
         """
         Class constructor for robot_obj
 
@@ -85,6 +98,7 @@ class robot_obj:
         self.movement_PID = robot_PID()
         self.move_counter = 10
         self.prev_distance = 0
+        self.reserve_nodes = 2
         self.state = Bot_State.IDLE
         self.green_light = False
         self.controlled = False
@@ -155,22 +169,31 @@ class robot_obj:
         Setter for robot controlled flag
 
         :param bool controlled: New flag state
-        :rtype:
+        :rtype: None
         """
         self.controlled = controlled
+
+    def set_reserve_distance(self, distance):
+        """
+        Setter for robot reserve distance
+
+        :param distance: New reserve distance
+        :rtype: None
+        """
+        self.reserve_nodes = distance
     
     def stop_moving(self):
         """
         Halts the robot and set it to idle state
 
-        :rtype:
+        :rtype: None
         """
         self.speed = 0
         self.rotation = 0
         self.movement_control.publish(self.twist)
         self.set_state(Bot_State.IDLE)
     
-    def distance_to_point(self, x2, y2) -> float: # in meters
+    def bot_distance_to_point(self, x2, y2) -> float: # in meters
         """
         Get the Euclidian distance between the robot and the provided coordinates
 
@@ -180,6 +203,18 @@ class robot_obj:
         """
         (x1, y1) = self.position
         return math.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+
+    def point_distance(self, x1, y1, x2, y2) -> float:
+        """
+        Get the Euclidian distance between the 2 provided coordinates
+
+        :param float x1: x coordinate of point 1
+        :param float y1: y coordinate of point 1
+        :param float x2: x coordinate of point 2
+        :param float y2: y coordinate of point 2
+        :rtype: float
+        """
+        return math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
     
     def angle_to_point(self, x2, y2) -> float: # required orientation to face the dest
         """
@@ -216,6 +251,24 @@ class robot_obj:
         if 0 <= cap <= 180:
             return 1 - (min(abs(self.angle_difference(x2, y2)), cap) / cap)
         raise ValueError("Cap angle provided is over 180")
+
+    def get_current_hold_point(self):
+        """
+        Get the current closest hold or destination waypoint
+
+        :rtype: Tuple[float, float, Waypoint_State]
+        :raise AssertionError: If hold is not found
+        """
+        for point in self.PID_queue:
+            if point[2] in [Waypoint_State.DESTINATION, Waypoint_State.HOLD, Waypoint_State.REQUESTED]:
+                return point
+
+        raise AssertionError("No hold point found")
+
+    def reserve_coord(self, point):
+        self.queue.put((-self.reserve_nodes, point)) # format: (priority, coord with state) may need to wrap coord into dataclass
+        point[2] = Waypoint_State.REQUESTED
+        print(f"bot {self.name} reserve coord: {point[0:1]}")
     
     def update_callback(self, msg):
         """
@@ -253,8 +306,8 @@ class robot_obj:
 
         :rtype: str
         """
-        (x, y, stopping) = self.PID_queue[0]
-        return f"name: {self.name}\tcurrent position: {self.position}\tcurrent orientation: {self.orientation}\tdestination: ({x}, {y})\tstopping: {stopping}\tcurrent state: {self.state.value}\n"
+        (x, y, waypoint_state) = self.PID_queue[0]
+        return f"name: {self.name}\tcurrent position: {self.position}\tcurrent orientation: {self.orientation}\tdestination: ({x}, {y})\tstopping: {waypoint_state}\tcurrent state: {self.state.value}\n"
 
     def PID_debug_string(self):
         """
@@ -263,11 +316,11 @@ class robot_obj:
         :rtype: str
         """
         if self.PID_queue:
-            (x, y, stopping) = self.PID_queue[0]
-            return f"\n\nPID stats:\ncurrent location: {self.position}\ncurrent destination: ({x}, {y})\nstopping: {stopping}\nqueue: {self.PID_queue}\nstate: {self.state.value}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}\nmove counter: {self.move_counter}\n"
+            (x, y, waypoint_state) = self.PID_queue[0]
+            return f"\n\nPID stats:\ncurrent location: {self.position}\ncurrent destination: ({x}, {y})\nstopping: {waypoint_state}\nqueue: {self.PID_queue}\nstate: {self.state.value}\n\norientation:\ncurrent orientation: {self.orientation}°\ndestination orientation: {self.angle_to_point(x, y)}°\ncurrent orientation difference: {self.angle_difference(x, y)}°\ncurrent angular movement: {self.rotation}%\ncurrent rotational PID output: {self.rotation_PID_output}\n\ndistance:\ncurrent distance to destination: {self.bot_distance_to_point(x, y)}\ncurrent speed: {self.speed}%\ncurrent movement PID output: {self.movement_PID_output}\nmove counter: {self.move_counter}\n"
         return "PID has no queued waypoints\n"
 
-    def PID_enqueue(self, x, y, stopping):
+    def PID_enqueue(self, x, y, waypoint_state):
         """
         Enqueues provided coordinates to the robot PID system
 
@@ -275,7 +328,7 @@ class robot_obj:
         :param y: y coordinate of the point
         :rtype: None
         """
-        self.PID_queue.append((x, y, stopping))
+        self.PID_queue.append((x, y, waypoint_state))
         # print(f"{x}, {y} enqueued")
     
     def PID_clear(self):
@@ -317,11 +370,11 @@ class robot_obj:
                         # 2. if angle diff lower than threhold and distance higher than threhold, start moving linearly towards goal, rotation PID stays active to correct course if needed
                         # 3. if distance lower than threshold, stop both PIDs and mark arrived flag, assign next waypoint if available
 
-                        (x, y, stopping) = self.PID_queue[0]
+                        (x, y, waypoint_state) = self.PID_queue[0]
 
                         if self.state == Bot_State.WAITING: # update destination to PIDs when starting new operation
-                            self.movement_PID.update_setpoint(self.distance_to_point(x, y))
-                            self.PID_movement_to_go = self.distance_to_point(x, y)
+                            self.movement_PID.update_setpoint(self.bot_distance_to_point(x, y))
+                            self.PID_movement_to_go = self.bot_distance_to_point(x, y)
                             if self.move_counter == 0:
                                 self.set_state(Bot_State.MOVING)
                             else:
@@ -352,26 +405,43 @@ class robot_obj:
                                     pass # todo fill in distributed collision avoidance algorithm here
                                 else:
                                     # todo fill in centralised management permission approval here
+                                    counter = 0
+                                    for point in self.PID_queue:
+                                        if counter < self.reserve_nodes:
+                                            if point[2] == Waypoint_State.DESTINATION:
+                                                break
+                                            elif point[2] == Waypoint_State.HOLD:
+                                                self.reserve_coord(point)
+                                            counter += 1
+                                        else:
+                                            break
                                     if False:
                                         self.set_state(Bot_State.EVADING)
 
                             # rotation PID
                             self.rotation_PID_output = self.rotation_PID.compute(self.angle_difference(x, y)) / 10 # + or - 90 to make the bot go in a right angled arc
-                            self.rotation = (min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, -self.PID_MAX_ROTATE)) * (1 if self.angle_difference(x, y) > 45 else max(self.angle_difference(x, y) / 45, 0.5))
+                            # apply max rotation
+                            self.rotation = min(self.rotation_PID_output, self.PID_MAX_ROTATE) if self.rotation_PID_output > 0 else max(self.rotation_PID_output, -self.PID_MAX_ROTATE)
+                            # apply linear reduction to rotation output to avoid PID oversteering
+                            self.rotation *= 1 if self.angle_difference(x, y) > 45 else max(self.angle_difference(x, y) / 45, 0.5)
 
-                            #movement PID
-                            self.movement_PID_output = self.movement_PID.compute(self.distance_to_point(x, y) - self.PID_movement_to_go) / 2
-                            self.speed = (max(min(self.movement_PID_output, self.PID_MAX_SPEED) * self.angle_difference_percentage(x, y, 180), 0.01)) * (min(1.0, self.distance_to_point(x, y) if stopping else 1)) # if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED), modified by how off course the robot is
+                            # movement PID
+                            self.movement_PID_output = self.movement_PID.compute(self.bot_distance_to_point(x, y) - self.PID_movement_to_go) / 2
+                            # apply max and min speed
+                            self.speed = max(min(self.movement_PID_output, self.PID_MAX_SPEED) * self.angle_difference_percentage(x, y, 180), self.PID_MOVING_MIN_SPEED)
+                            # apply speed throttling when orientation is off course, does not apply to non stopping waypoints
+                            self.speed *= min(1.0, self.bot_distance_to_point(x, y) if waypoint_state != Waypoint_State.WAYPOINT else 1) # if self.speed > 0 else max(self.PID_accel + self.speed, -self.PID_MAX_SPEED), modified by how off course the robot is
 
-                            if self.distance_to_point(x, y) < self.PID_DIST_THRESHOLD: # if destination reached
-                                if stopping:
+                            if self.bot_distance_to_point(x, y) < self.PID_DIST_THRESHOLD: # if destination reached
+                                if waypoint_state == Waypoint_State.DESTINATION:
                                     self.rotation_PID.reset_integral()
                                     self.move_counter = 50
 
-                                self.PID_queue.pop(0)
-                                self.set_state(Bot_State.WAITING)
+                                if waypoint_state != Waypoint_State.REQUESTED: # do not remove point if next waypoint is requested but not approved
+                                    self.PID_queue.pop(0)
+                                    self.set_state(Bot_State.WAITING)
 
-                        self.prev_distance = self.distance_to_point(x, y)
+                        self.prev_distance = self.bot_distance_to_point(x, y)
 
                     else:
                         self.speed = 0
