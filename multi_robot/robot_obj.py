@@ -66,7 +66,7 @@ class robot_obj:
     PID_ORIENTATION_ROTATE_THRESHOLD = 5
     PID_MAX_SPEED = 3
     PID_MAX_ROTATE = 0.3
-    PID_MOVING_MIN_SPEED = 0.002
+    PID_MOVING_MIN_SPEED = 0
     MAX_SPEED = 0.22
     MAX_ROTATION = 2.84
 
@@ -226,7 +226,7 @@ class robot_obj:
         :rtype: float
         """
         (x1, y1) = self.position
-        return np.rad2deg(np.arctan2(y2 - y1, x2 - x1)) + 180 if x1 != x2 or y1 != y2 else 0
+        return (np.rad2deg(np.arctan2(y2 - y1, x2 - x1)) + 360) % 360 if x1 != x2 or y1 != y2 else 0
     
     def angle_difference(self, x2, y2) -> float: # the angle diff between current and required angle
         """
@@ -236,6 +236,7 @@ class robot_obj:
         :param float y2: y coordinate of the point
         :rtype: float
         """
+        # return ((self.angle_to_point(x2, y2) - self.orientation) + 180) % 360 - 180
         output = (self.orientation - self.angle_to_point(x2, y2)) % 360
         return output if output < 180 else -(180 - (output - 180))
     
@@ -259,23 +260,30 @@ class robot_obj:
 
         :rtype: Tuple[float, float, Waypoint_State]
         """
-        for point in self.PID_queue:
+        for i in range(len(self.PID_queue)):
+            point = self.PID_queue[i]
             if point[2] != Waypoint_State.WAYPOINT:
-                return point
+                if point[2] in [Waypoint_State.REQUESTED, Waypoint_State.REQUESTED_DESTINATION]:
+                    return self.PID_queue[i - 1]
+                else:
+                    return self.PID_queue[i]
 
         return self.position[0], self.position[1], None # given when queue is empty
 
-    def reserve_coord(self, point, id): # todo prevent this from running constantly
+    def reserve_coord(self, point): # todo prevent this from running constantly
         # print(f"{self.PID_queue[0]}")
-        self.update_waypoint((point[0], point[1], Waypoint_State.REQUESTED if point[2] == Waypoint_State.HOLD else Waypoint_State.REQUESTED_DESTINATION), id)
+        new_point = (point[0], point[1], Waypoint_State.REQUESTED if point[2] == Waypoint_State.HOLD else Waypoint_State.REQUESTED_DESTINATION)
+        self.update_waypoint(point, new_point)
         # print(f"{self.PID_queue[0]}")
-        self.queue.put((-self.reserve_nodes, self.PID_queue[id], self.name, id)) # format: (priority, coord with state, bot name, queue id) may need to wrap coord into dataclass
+        self.queue.put((-self.reserve_nodes, new_point, self.name)) # format: (priority, coord with state, bot name) may need to wrap coord into dataclass
         # print(f"bot {self.name} reserve coord: {self.PID_queue[id]}")
 
-    def update_waypoint(self, point, id):
-        # print(f"{self.PID_queue[0]} -> {point}")
-        self.PID_queue[id] = point
-    
+    def update_waypoint(self, fromm, to):
+        # print(f"{fromm} -> {to}")
+        for i in range(len(self.PID_queue)):
+            if self.PID_queue[i] == fromm:
+                self.PID_queue[i] = to
+
     def update_callback(self, msg):
         """
         Callback function to update the robot state (position, orientation), will be run constantly
@@ -286,7 +294,7 @@ class robot_obj:
         position: Tuple[float, float] = msg.pose.pose.position
         quat = msg.pose.pose.orientation
         # line below modified from https://github.com/Tinker-Twins/Autonomy-Science-And-Systems/blob/main/Assignment%203-A/assignment_3a/turtlebot3/turtlebot3/turtlebot3_example/turtlebot3_example/turtlebot3_position_control/turtlebot3_position_control.py
-        self.orientation = np.arctan2(2 * (quat.w * quat.z + quat.x * quat.y), 1 - 2 * (quat.y ** 2 + quat.z ** 2)) * 180 / math.pi + 180 # added 180 bc the original scale goes from -180 to 180
+        self.orientation = (np.arctan2(2 * (quat.w * quat.z + quat.x * quat.y), 1 - 2 * (quat.y ** 2 + quat.z ** 2)) * 180 / math.pi + 360) % 360 # added 360 bc the original scale goes from -180 to 180, 0deg faces x axis
         self.position = [position.x, position.y] # tuples assign like mini arrays
         # print(f"robot {self.name} callback, pos: {self.position}")
     
@@ -404,7 +412,7 @@ class robot_obj:
                             # do formation checks here
                             if self.green_light and self.controlled:
                                 if self.PID_queue[0][2] in [Waypoint_State.HOLD, Waypoint_State.DESTINATION]:
-                                    self.reserve_coord(self.PID_queue[0], 0)
+                                    self.reserve_coord(self.PID_queue[0])
                                 elif self.PID_queue[0][2] in [Waypoint_State.REQUESTED, Waypoint_State.REQUESTED_DESTINATION]:
                                     pass
                                 else:
@@ -428,7 +436,7 @@ class robot_obj:
                                                 break
                                             elif point[2] in [Waypoint_State.HOLD, Waypoint_State.DESTINATION]:
                                                 # print(f"to reserve node {point} on queue id {i}")
-                                                self.reserve_coord(point, i)
+                                                self.reserve_coord(point)
                                                 break
                                             counter += 1
                                         else:
@@ -444,7 +452,7 @@ class robot_obj:
                             self.rotation *= 1 if self.angle_difference(x, y) > 45 else max(self.angle_difference(x, y) / 45, 0.5)
 
                             # movement PID
-                            self.movement_PID_output = self.movement_PID.compute(self.bot_distance_to_point(x, y) - self.PID_movement_to_go) / 2
+                            self.movement_PID_output = self.movement_PID.compute(self.bot_distance_to_point(x, y) - self.PID_movement_to_go)
                             # apply max and min speed
                             self.speed = max(min(self.movement_PID_output, self.PID_MAX_SPEED) * self.angle_difference_percentage(x, y, 180), self.PID_MOVING_MIN_SPEED)
                             # apply speed throttling when orientation is off course, does not apply to non stopping waypoints
@@ -455,10 +463,19 @@ class robot_obj:
                                 if waypoint_state == Waypoint_State.GRANTED_DESTINATION:
                                     self.rotation_PID.reset_integral()
                                     self.move_counter = 50
-
-                                if waypoint_state not in [Waypoint_State.REQUESTED, Waypoint_State.REQUESTED_DESTINATION]: # do not remove point if next waypoint is requested but not approved
                                     self.PID_queue.pop(0)
                                     self.set_state(Bot_State.WAITING)
+                                elif waypoint_state == Waypoint_State.WAYPOINT:
+                                    if self.PID_queue[1][2] in [Waypoint_State.HOLD, Waypoint_State.DESTINATION]:
+                                        self.speed = 0
+                                        self.rotation = 0
+                                    else:
+                                        self.PID_queue.pop(0)
+                                        self.set_state(Bot_State.WAITING)
+                                else:
+                                    self.speed = 0.00001
+                                    self.rotation = 0
+
 
                         self.prev_distance = self.bot_distance_to_point(x, y)
 

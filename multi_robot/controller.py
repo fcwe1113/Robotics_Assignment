@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import heapq
+import math
 import queue
 import threading
 from typing import Any, Tuple
@@ -70,6 +72,64 @@ def getKey():
     key = sys.stdin.read(1)
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
     return key
+
+def BFS(start, destination):
+    queuee = [start]
+    parent_map = {start: None}
+    visited = [start]
+
+    # queue stores only coords
+    # parent map stores coord and dir
+    while queuee:
+        # Pop the first node from the queue
+        current_node = queuee.pop(0)
+        # print(f"{current_node} -> {destination}")
+
+        # Check if we have reached the end and return
+        if current_node == destination:
+            break
+
+        (x, y) = current_node
+        neighbours = []
+        if x % 1 == 0:  # up down
+            neighbours.append((x, y + 0.5, 0))
+        else:
+            neighbours.append((x, y - 0.5, 0))
+
+        if x % 1 == 0:  # left right
+            neighbours.append((x - 0.5, y, 1))
+        else:
+            neighbours.append((x + 0.5, y, 1))
+
+        if (x + y) % 1 == 0:  # diagonals
+            neighbours.append((x - 0.5, y + 0.5, 2))
+            neighbours.append((x - 0.5, y - 0.5, 3))
+        else:
+            neighbours.append((x + 0.5, y + 0.5, 2))
+            neighbours.append((x + 0.5, y - 0.5, 3))
+
+        # Add neighbors to Queue
+        for neighbour in neighbours:
+            x, y, dirr = neighbour
+            if (x, y) not in visited:
+                visited.append((x, y))
+                parent_map[(x, y)] = (current_node[0], current_node[1], dirr)
+                queuee.append((x, y))
+
+    path = []
+    # Start from the end node
+    current = parent_map[(destination[0], destination[1])]
+    # print(parent_map)
+
+    # Loop backwards until start node, parent is None
+    # (x, y): (x, y, dir)
+    while current is not None:
+        path.append(parent_map[(current[0], current[1])])
+        current = parent_map[(current[0], current[1])]
+        # print(current)
+
+    # Reverse the path to be from start to end and return
+    return path[::-1][2:]
 
 def selected_bot_control(selected_bot):
     """
@@ -208,7 +268,7 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
                     if bot.is_ready():
                         # print(f"test: {reservation[0]}, {reservation[1]}\ntype0: {type(reservation[1][0])}\ntype1: {type(reservation[1][1])}")
                         if bot.bot_distance_to_point(reservation[1][0][0], reservation[1][0][1]) > bot.bot_distance_to_point(reservation[1][1][0], reservation[1][1][1]):
-                            print(f"bot {bot.name} left {reservation[1][0]}")
+                            # print(f"bot {bot.name} left {reservation[1][0]}")
                             reservation[1].pop(0)
 
             # reservation logic
@@ -226,7 +286,7 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
 
             while len(queue_list) > 0: # clear the queue
                 # print(f"list: {queue_list}")
-                request: Tuple[int, Tuple[float, float, Waypoint_State], str, int] = queue_list.pop(0)
+                request: Tuple[int, Tuple[float, float, Waypoint_State], str] = queue_list.pop(0)
                 skip = False
                 for key in list(reservations.keys()): # todo check if for loop modifies var outside
                     if (request[1][0], request[1][1]) in reservations[key]:
@@ -237,7 +297,10 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
                 if not skip:
                     # print(request)
                     reservations[request[2]].append((request[1][0], request[1][1]))
-                    robot_list[request[2]].update_waypoint((request[1][0], request[1][1], Waypoint_State.WAYPOINT if request[1][2] == Waypoint_State.REQUESTED else Waypoint_State.GRANTED_DESTINATION), request[3])
+                    # if len(robot_list[request[2]].PID_queue) > request[3]:
+                    robot_list[request[2]].update_waypoint(request[1], (request[1][0], request[1][1], Waypoint_State.WAYPOINT if request[1][2] == Waypoint_State.REQUESTED else Waypoint_State.GRANTED_DESTINATION))
+                    # else:
+                    #     print(f"bot {request[2]} had empty queue when attempting to update waypoint\nqueue: {robot_list[request[2]].PID_queue}\nupdating waypoint: {(request[1][0], request[1][1], Waypoint_State.WAYPOINT if request[1][2] == Waypoint_State.REQUESTED else Waypoint_State.GRANTED_DESTINATION)}\nqueue id: {request[3]}")
                     print(f"granted bot {request[2]} permission to travel to {(request[1][0], request[1][1])}")
 
             for name in list(robot_list.keys()):
@@ -248,22 +311,29 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
                 if bot.get_state() in [Bot_State.WAITING, Bot_State.IDLE]:
                     if bot.PID_if_queue_empty():
                         # print(f"{bot.name}: {bot.PID_if_queue_empty()}")
-                        new_dest = [random.randint(-10, 10), random.randint(-10, 10)]
-                        current_coord = [round_point_5(bot.position[0]), round_point_5(bot.position[1])]
+                        new_dest = (random.randint(-20, 20) / 2, random.randint(-20, 20) / 2)
+                        current_coord = (round_point_5(bot.position[0]), round_point_5(bot.position[1]))
 
-                        while current_coord[0] != new_dest[0] and current_coord[1] != new_dest[1]:
-                            current_coord[0] += 0.5 if current_coord[0] < new_dest[0] else -0.5
-                            current_coord[1] += 0.5 if current_coord[1] < new_dest[1] else -0.5
-                            bot.PID_enqueue(current_coord[0], current_coord[1], Waypoint_State.DESTINATION if current_coord[0] == new_dest[0] or current_coord[1] == new_dest[1] else Waypoint_State.HOLD)
+                        # pathing:
+                        # up down => up only on whole int, down only on .5
+                        # left right => left only on whole int, right only on .5
+                        # left up right down diag => up only on whole int, down only on .5 (sum the coords)
+                        # left down right up diag => down only on whole int, up only on .5 (sum the coords)
 
-                        while current_coord[0] != new_dest[0]:
-                            current_coord[0] += 0.5 if current_coord[0] < new_dest[0] else -0.5
-                            bot.PID_enqueue(current_coord[0], current_coord[1], Waypoint_State.HOLD if current_coord[0] != new_dest[0] else Waypoint_State.DESTINATION)
-                        while current_coord[1] != new_dest[1]:
-                            current_coord[1] += 0.5 if current_coord[1] < new_dest[1] else -0.5
-                            bot.PID_enqueue(current_coord[0], current_coord[1], Waypoint_State.HOLD if current_coord[1] != new_dest[1] else Waypoint_State.DESTINATION)
+                        # 1. gather all available next nodes
+                        # 2. get node that brings the bot closer to the target
+                        # 3. put all nodes in a list
+                        # 4. resolve into waypoints
 
-                        # bot.PID_enqueue(new_dest[0], new_dest[1], Waypoint_State.DESTINATION)
+                        last_dir = -1
+                        path = BFS(current_coord, new_dest)
+                        for (x, y, dirr) in path: # node format: (x, y, dir)
+                            waypoint_state = Waypoint_State.HOLD if last_dir == -1 or last_dir == dirr else Waypoint_State.DESTINATION
+                            bot.PID_enqueue(x, y, waypoint_state)
+                            # print(f"enqueued bot {name}: ({x}, {y}) {waypoint_state.value}")
+                            last_dir = dirr
+                        bot.PID_enqueue(new_dest[0], new_dest[1], Waypoint_State.DESTINATION)
+
                         if bot.get_state() == Bot_State.WAITING:
                             print(f"bot {name} arrived at destination, given new destination: {new_dest}")
                         else:
