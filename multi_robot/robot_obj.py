@@ -284,6 +284,9 @@ class robot_obj:
             if self.PID_queue[i] == fromm:
                 self.PID_queue[i] = to
 
+    # def get_diagonal(self):
+
+
     def update_callback(self, msg):
         """
         Callback function to update the robot state (position, orientation), will be run constantly

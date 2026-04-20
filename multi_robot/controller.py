@@ -293,6 +293,7 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
                         request_queue.put(request) # loop the unsolvable request back into the queue
                         skip = True
                         break
+                    # elif
 
                 if not skip:
                     # print(request)

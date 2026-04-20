@@ -3,4 +3,7 @@ name = "robotics-assignment"
 version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "np>=1.0.2",
+    "numpy>=2.4.4",
+]
