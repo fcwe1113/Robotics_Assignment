@@ -1,9 +1,11 @@
+import time
 import numpy as np
 import rospy
 import threading
 import math
+import csv
 
-from typing import Tuple, List
+from typing import Tuple, List, Union
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from robot_PID import robot_PID
@@ -46,6 +48,9 @@ class robot_obj:
     :cvar queue: thread safe priority queue to reserve next coord
     :cvar reserve_nodes: distance to try and reserve from the controller, will also be used to identify queue priority
 
+    :cvar PID_record_gap: amount of nanoseconds to wait to record speed and rotation output values, leave empty to disable recording function
+    :cvar PID_record_timestamp: timestamp of the previous recording, disabled if above is empty
+
     """
 
     name: str
@@ -60,6 +65,8 @@ class robot_obj:
     green_light: bool
     controlled: bool
     queue: PriorityQueue
+    PID_record_gap: int
+    PID_record_timestamp: Union[int, None]
 
     # attributes (or constants)
     PID_DIST_THRESHOLD = 0.1
@@ -70,18 +77,15 @@ class robot_obj:
     MAX_SPEED = 0.22
     MAX_ROTATION = 2.84
 
-    # todo movement procedures
-    # 1. controller insert all intermediate waypoints as HOLD
-    # 2. before start reserve the next coord, wait until that goes through, when reserved flip reserved waypoint to WAYPOINT
-    # 3. as robot starts rolling reserve next coord, speed modified proportionally to distance to queue head
-    # 4. keep using the already implemented "slow down when within 1m" function but use the closest HOLD/DEST point as reference
-
-    def __init__(self, name, queue):
+    def __init__(self, name, queue, record_gap=None):
         """
         Class constructor for robot_obj
 
         :param str name: Name of the robot
+        :param PriorityQueue queue: PriorityQueue to pass coordinate requests to main thread
+        :param int | None record_gap: The gap between each speed and rotation recording, enter None to disable functionality
         """
+
         self.name = name
         self.twist = Twist()
         self.speed = 0
@@ -104,6 +108,15 @@ class robot_obj:
         self.controlled = False
         self.self_evading = False
         self.queue = queue
+
+        self.PID_record_gap = record_gap
+        self.PID_record_timestamp = None
+        if record_gap is not None:
+            self.PID_record_timestamp = time.time_ns()
+            with open(f'/home/fcwe1113/{self.name}.csv', 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["speed", "rotation"])
+
 
         # start the bot thread
         self.bot_thread = threading.Thread(target=self.spin)
@@ -486,10 +499,21 @@ class robot_obj:
                         self.speed = 0
                         self.rotation = 0
                 
+                if self.PID_record_timestamp is not None:
+                    if time.time_ns() - self.PID_record_timestamp > self.PID_record_gap:
+                        if self.is_ready():
+                            with open(f'/home/fcwe1113/{self.name}.csv', 'a', newline='') as f:
+                                writer = csv.writer(f)
+                                writer.writerows([[self.speed, self.rotation]])
+                            # self.PID_output_df.to_csv(f'{self.name}.csv', index=False)
+                            # print(f"{self.name}.csv saved")
+                        self.PID_record_timestamp = time.time_ns()
+
                 self.twist.linear.x = self.speed * self.MAX_SPEED
                 self.twist.angular.z = self.rotation * self.MAX_ROTATION
                 self.movement_control.publish(self.twist) # test when cutting this
 
             rate.sleep()
-    
+
+
     

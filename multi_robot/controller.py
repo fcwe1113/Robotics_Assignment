@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-import heapq
-import math
-import queue
 import threading
 from typing import Any, Tuple
 
@@ -26,10 +23,11 @@ control_thread = None # variable to hold threaded controller functions
 request_queue = PriorityQueue() # thread safe priority queue for centralized mode
 reservations = None # reservation dict with identifications on which bot reserved which coords
 
-def spawn_bot(name, x, y) -> robot_obj:
+def spawn_bot(name, x, y, log_interval=None) -> robot_obj:
     """
     Spawns a new turtlebot within the simulation
 
+    :arg int log_interval: interval of robot logging, leave empty to disable logging
     :arg str name: Name of the turtlebot
     :arg float x: x coordinate of the spawn location
     :arg float y: y coordinate of the spawn location
@@ -42,7 +40,7 @@ def spawn_bot(name, x, y) -> robot_obj:
     roslaunch_file = [(roslaunch.rlutil.resolve_launch_arguments(cli_args)[0], cli_args[2:])]
     parent = roslaunch.parent.ROSLaunchParent(uuid, roslaunch_file)
     parent.start()
-    return robot_obj(name, request_queue)
+    return robot_obj(name, request_queue, log_interval)
 
 def display_bot_infos() -> str:
     """
@@ -74,6 +72,14 @@ def getKey():
     return key
 
 def BFS(start, destination):
+    """
+    BFS to find path for robots
+
+    :param Tuple[float, float] start: Start coordinates
+    :param Tuple[float, float] destination: End coordinates
+    :return: The path to get from start to end
+    :rtype: List[Tuple[float, float]]
+    """
     queuee = [start]
     parent_map = {start: None}
     visited = [start]
@@ -234,25 +240,6 @@ def random_PID_movement_controller(): # thread to manage robots when on PID move
 
     :rtype: None
     """
-    # todo collision avoidance???
-
-    # todo centralised control
-    # todo 1. controller track environment via in thread memory grid (allowing bots to be in .5 coords mean the grid tracked by controller is -40 to 40 on both axis)
-    # todo 2. bots are allowed to traverse up down left right and diagonal 45deg, maybe allow other diag angles in expense of reserving more than the bot needs
-    # todo 3. controller on giving new dest coords also give waypoints from a* to bot, controller also allows certain bots to reserve entire path to simulate priority
-    # todo 4. bot will reserve 3 coords, coord it just left, coord currently traversing to, and next valid coord past that. bots will wait at second coord until third coord reserved
-    # todo 5. bot will report arrived coord for controller to free up coord reserve
-    # todo 6. bot and controller will contact via predefined API via maybe a processing queue on controller thread
-
-    # todo distributed control
-    # todo 1. controller role limited to only providing new destination coords and robots will travel in straight line towards dest
-    # todo 2. robots will publish their position and 1m trajectory to every other robot
-    # todo 3. robots will keep track of the 1m trajectory of the all robots within 3m
-    # todo 4. if 2 1m trajectories are found to be colliding, the robot furthest from the intersect point would be evading collision
-    # todo 5: if the intersect angle > 90deg, evading robot would make course for parallel movement against the other robot (set rotation PID angle to opposing robot orientation), and resume normal course when the distance between the 2 increases
-    # todo 6: if the intersect angle <= 90deg, evading robot would set angle to halfway point of opposing robot trajectory, and resume normal course when the distance between the 2 increases
-    # todo 7: if one robot is arriving and one isnt, the non arriving robot would plot non stopping waypoint either opposing robot current location (when opposing trajectory > 0.5 long) or 0.5 distance away to opposing robot's current destination with angle set to opposing robot angle to attack towards destination (when opposing trajectory <= 0.5 long), and resume course when the distance between teh 2 bots increases
-    # todo 8: if more than 1 robot arriving in destinations within 0.5 distance of each other, make a queue and wait for the robot arriving first to leave
 
     random.seed(time.time())
     while not stop:
@@ -433,7 +420,7 @@ if __name__=="__main__":
                                 break
                             name = f"tb3_{str(len(robot_list))}"
                             reservations[name] = [(x, y)]
-                            bot = spawn_bot(name, x, y)
+                            bot = spawn_bot(name, x, y, 100000000)
                             robot_list[name] = bot
                             robot_list[name].set_controlled(True)
                             print(f"new robot spawned at ({x}, {y})")
